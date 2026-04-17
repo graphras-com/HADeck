@@ -1,0 +1,12 @@
+[project]
+name = "dsui-collection"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "deckboard",
+]
+
+[tool.uv.sources]
+deckboard = { git = "https://github.com/graphras-com/Deckboard.git" }

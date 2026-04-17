@@ -1,0 +1,87 @@
+name: AudioCard
+type: TouchStripCard
+version: 1
+layout: layout.svg
+
+bindings:
+  artist:
+    type: text
+    node: artist
+    default: ""
+    max_width: 190
+    overflow: ellipsis
+
+  title:
+    type: text
+    node: title
+    default: ""
+    max_width: 190
+    overflow: ellipsis
+
+  album:
+    type: text
+    node: album
+    default: ""
+    max_width: 190
+    overflow: ellipsis
+
+  state:
+    type: text
+    node: state
+    default: "Stopped"
+
+  cover:
+    type: image
+    node: cover
+    fit: cover
+    placeholder_node: cover_placeholder
+
+  value_text:
+    type: text
+    node: value_text
+    default: "50%"
+
+  bar_color:
+    type: color
+    node: volume_bar
+    attribute: fill
+    default: "#dedede"
+
+  volume:
+    type: range
+    node: volume_bar
+    default: 0.5
+    direction: horizontal
+
+events:
+  - name: toggle_play_pause
+    source: encoder_hold
+    hold_ms: 500
+
+  - name: volume_down
+    source: encoder_turn
+    direction: left
+
+  - name: volume_up
+    source: encoder_turn
+    direction: right
+
+  - name: mute_toggle
+    source: encoder_press_release
+    max_duration_ms: 300
+
+  - name: previous
+    source: encoder_press_turn
+    direction: left
+
+  - name: next
+    source: encoder_press_turn
+    direction: right
+
+regions:
+  card:
+    x: 0
+    y: 0
+    width: 197
+    height: 98
+    events: [tap, long_press]

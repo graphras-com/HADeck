@@ -1,0 +1,19 @@
+name: PictureKey
+type: Key
+version: 1
+layout: layout.svg
+
+bindings:
+  label:
+    type: text
+    node: text
+    default: "Label"
+    max_width: 90
+    wrap: true
+    max_height: 54
+    overflow: ellipsis
+
+events:
+  - name: click
+    source: key_press_release
+    max_duration_ms: 300

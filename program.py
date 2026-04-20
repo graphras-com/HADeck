@@ -40,7 +40,8 @@ async def main():
     async with HAClient(url, token=token) as ha, Deck(brightness=60) as deck:
         screen = deck.screen("main")
 
-        screen.touch_strip.background_color = "#1c1c1c"
+        if screen.touch_strip is not None:
+            screen.touch_strip.background_color = "#1c1c1c"
 
 
         player = ha.media_player("entertainment")
@@ -58,8 +59,9 @@ async def main():
                 break
             f = DsuiKey(picturekey_spec)
             f.set("label", fav.title)
-            thumbnail = Image.open(BytesIO(requests.get(fav.thumbnail).content))
-            f.set("picture", thumbnail)
+            if fav.thumbnail is not None:
+                thumbnail = Image.open(BytesIO(requests.get(fav.thumbnail).content))
+                f.set("picture", thumbnail)
 
             @f.on_event("click")
             async def f_click(media_item=fav.media_content_id):

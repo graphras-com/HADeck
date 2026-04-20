@@ -8,10 +8,14 @@ bindings:
     type: text
     node: text
     default: "Label"
-    max_width: 90
+    max_width: 96
     wrap: true
-    max_height: 54
+    max_height: 76
     overflow: ellipsis
+
+  picture:
+    type: image
+    node: picture
 
 events:
   - name: click

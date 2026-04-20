@@ -5,8 +5,13 @@ from PIL import Image
 import asyncio
 import logging
 from pathlib import Path
-
+from ha_client import HAClient
 from deckboard import Deck, DsuiCard, DsuiKey, load_package
+import os
+from dotenv import load_dotenv
+import requests
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -27,12 +32,42 @@ async def main():
     picturekey_spec = _load_package("PictureKey.dsui")
     # endregion
 
+    url = os.environ["HA_URL"]
+    token = os.environ["HA_TOKEN"]
+
     img = Image.open(BytesIO(audiocard_spec.assets["album_art.jpeg"]))
 
-    async with Deck(brightness=80) as deck:
+    async with HAClient(url, token=token) as ha, Deck(brightness=60) as deck:
         screen = deck.screen("main")
 
         screen.touch_strip.background_color = "#1c1c1c"
+
+
+        player = ha.media_player("entertainment")
+        favs = await player.favorites()
+        favkeys = [0, 1, 2, 4, 5, 6]
+
+        category_order = {"Radio": 0, "Playlists": 1, "Albums": 2}
+        favs = sorted(
+            favs,
+            key=lambda f: (category_order.get(f.category or "", 99), f.title or ""),
+        )
+
+        for key_index, fav in enumerate(favs):
+            if key_index >= len(favkeys):
+                break
+            f = DsuiKey(picturekey_spec)
+            f.set("label", fav.title)
+            thumbnail = Image.open(BytesIO(requests.get(fav.thumbnail).content))
+            f.set("picture", thumbnail)
+
+            @f.on_event("click")
+            async def f_click(media_item=fav.media_content_id):
+                print(f"Play: {media_item}")
+
+            screen.set_key(favkeys[key_index], f)
+            print(fav)
+
 
         # region AudioCard
         volume = 0.5
@@ -199,6 +234,7 @@ async def main():
         # endregion
 
         # region Up and Down Keys
+        """
         up = DsuiKey(iconkey_spec)
         up.set("label", "Shades")
         background_color = up.get("background")
@@ -242,9 +278,11 @@ async def main():
         @down.on_event("click")
         async def down_click():
             print("Down clicked")
+        """
         # endregion
 
         # region Favorites Keys
+        """
         fav1 = DsuiKey(picturekey_spec)
         fav1.set("label", "Arthur Olsen's Favorite Music")
         screen.set_key(0, fav1)
@@ -257,6 +295,7 @@ async def main():
         fav4 = DsuiKey(picturekey_spec)
         fav4.set("label", "Blues Essentials")
         screen.set_key(5, fav4)
+        """
         # endregion
 
         await deck.set_screen("main")

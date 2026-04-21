@@ -5,7 +5,7 @@ from PIL import Image
 import asyncio
 import logging
 from pathlib import Path
-from ha_client import HAClient
+from ha_client import HAClient,NowPlaying
 from deckboard import Deck, DsuiCard, DsuiKey, load_package
 import os
 from dotenv import load_dotenv
@@ -32,19 +32,21 @@ async def main():
     picturekey_spec = _load_package("PictureKey.dsui")
     # endregion
 
-    url = os.environ["HA_URL"]
+    server = os.environ["HA_URL"]
     token = os.environ["HA_TOKEN"]
 
     img = Image.open(BytesIO(audiocard_spec.assets["album_art.jpeg"]))
 
-    async with HAClient(url, token=token) as ha, Deck(brightness=60) as deck:
+    async with HAClient(server, token=token) as ha, Deck(brightness=60) as deck:
         screen = deck.screen("main")
 
         if screen.touch_strip is not None:
             screen.touch_strip.background_color = "#1c1c1c"
 
 
-        player = ha.media_player("entertainment")
+        player = ha.media_player("study")
+        await player.async_refresh()
+
         favs = await player.favorites()
         favkeys = [0, 1, 2, 4, 5, 6]
 
@@ -58,7 +60,8 @@ async def main():
             if key_index >= len(favkeys):
                 break
             f = DsuiKey(picturekey_spec)
-            f.set("label", fav.title)
+            # Leave Label Empty
+            f.set("label", "")
             if fav.thumbnail is not None:
                 thumbnail = Image.open(BytesIO(requests.get(fav.thumbnail).content))
                 f.set("picture", thumbnail)
@@ -72,73 +75,82 @@ async def main():
 
 
         # region AudioCard
-        volume = 0.5
         muted = False
         audio = DsuiCard(audiocard_spec)
-        audio.set("artist", "Ash Walker")
-        audio.set("title", "Afghanistan")
-        audio.set("album", "Echo Chamber (Deluxe)")
-        audio.set("state", "Playing")
-        audio.set("volume", volume)
-        audio.set("value_text", f"{int(volume * 100)}%")
 
+        async def update_playing_media(media:NowPlaying):
+            picture = None
+            if media.entity_picture is not None:
+                picture_url = ha.base_url + media.entity_picture
+                picture = Image.open(BytesIO(requests.get(picture_url).content))
+            print(f"Album: {media.title}")
+            audio.set_many(artist=media.artist, title=media.title, album=media.album, cover=picture)
+            await deck.refresh()
+
+        await update_playing_media(player.now_playing)
+
+        audio.set("state", "Playing" if player.is_playing else "Paused")
+
+        # Volume
+        volume = player.volume_level or 0.0
+        audio.set("volume", volume)
+
+        if player.is_muted:
+            audio.set("value_text", "Muted")
+        else:
+            audio.set("value_text", f"{int(volume * 100)}%")
+        
         screen.set_card(0, audio)
 
-        playing = True
-        track_index = 0
-        tracks = [
-            ("Ash Walker", "Afghanistan", "Echo Chamber (Deluxe)"),
-            ("Bonobo", "Kerala", "Migration"),
-            ("Khruangbin", "Maria También", "Con Todo El Mundo"),
-        ]
+        @player.on_volume_change
+        async def on_volume_change(old, new):
+            print(old);
+            print(new)
+            volume = player.volume_level or 0.0
+            audio.set("volume", volume)
+            audio.set("value_text", f"{int(volume * 100)}%")
+            await deck.refresh()
 
+        @player.on_mute_change
+        async def on_mute_change(old, new):
+            if new:
+                audio.set("value_text", "Muted")
+            else:
+                audio.set("value_text", f"{int(volume * 100)}%")
+            await deck.refresh()
+
+        @player.on_play
+        async def on_play(old, new):
+            audio.set("state", "Playing")
+            await deck.refresh()
+
+        @player.on_pause
+        async def on_pause(old, new):
+            audio.set("state", "Paused")
+            await deck.refresh()
+
+        @player.on_media_change
+        async def on_media_change(old, new):
+            await update_playing_media(new)
+                      
         @audio.on("toggle_play_pause")
         async def on_toggle():
-            nonlocal playing
-            playing = not playing
-            audio.set("state", "Playing" if playing else "Paused")
-            print(f"{'Playing' if playing else 'Paused'}")
-            await deck.refresh()
+            await player.play_pause()
 
         @audio.on("volume_up")
         async def on_up():
-            nonlocal volume
-            nonlocal muted
-            if muted:
-                return
-            volume = min(1.0, volume + 0.01)
-            audio.set("volume", volume)
-            audio.set("value_text", f"{int(volume * 100)}%")
-            if muted:
-                audio.set("bar_color", "#dedede")
-            print(f"Volume: {int(volume * 100)}%")
             await deck.refresh()
 
         @audio.on("volume_down")
         async def on_down():
-            nonlocal volume
-            nonlocal muted
-            if muted:
-                return
-            volume = max(0.0, volume - 0.01)
-            audio.set("volume", volume)
-            audio.set("value_text", f"{int(volume * 100)}%")
-            print(f"Volume: {int(volume * 100)}%")
             await deck.refresh()
 
         @audio.on("mute_toggle")
-        async def on_mute():
-            nonlocal muted
-            muted = not muted
-            if muted:
-                audio.set("bar_color", "#ff4444")
-                audio.set("value_text", "MUTED")
-            else:
-                audio.set("bar_color", "#dedede")
-                audio.set("value_text", f"{int(volume * 100)}%")
-            print(f"{'Muted' if muted else 'Unmuted'}")
-            await deck.refresh()
+        async def on_toggle_mute():
+            new_state = not player.is_muted
+            await player.mute(new_state)
 
+        """
         @audio.on("next")
         async def on_next():
             nonlocal track_index
@@ -156,7 +168,7 @@ async def main():
             audio.set_many(artist=artist, title=title, album=album)
             print(f"⏮ {artist} — {title}")
             await deck.refresh()
-
+        """
         # endregion
 
         # region LightCard

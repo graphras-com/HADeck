@@ -1,33 +1,34 @@
 # AGENTS.md
 
-## Project
+## Project overview
 
-DSUI-Collection: a set of `.dsui` UI packages (keys and touchscreen cards) for a Stream Deck-like device, driven by the `deckboard` and `ha_client` (Home Assistant) libraries.
+StreamDeck+ client for Home Assistant. Single-file Python app (`main.py`) that drives a StreamDeck+ via the `deckboard` library and connects to Home Assistant via `ha_client`.
 
 ## Setup
 
-- Python 3.11, managed via **uv** (lockfile: `uv.lock`)
+- Python 3.11, managed with **uv**
 - Install: `uv sync`
-- Two git-sourced dependencies in `pyproject.toml` under `[tool.uv.sources]`:
+- Two git-sourced dependencies (see `[tool.uv.sources]` in `pyproject.toml`):
   - `deckboard` → github.com/graphras-com/Deckboard
   - `ha_client` → github.com/graphras-com/HAClient
+- Requires a `.env` file with `HA_URL` and `HA_TOKEN` (loaded via `python-dotenv`)
 
 ## Running
 
-- Entry point: `uv run program.py` (async, connects to a physical deck + Home Assistant)
-- Requires `.env` with `HA_URL` and `HA_TOKEN`
-- `main.py` is a placeholder; `program.py` is the real entry point
+```
+uv run main.py
+```
 
-## DSUI packages
+Needs a physical StreamDeck+ connected. No test suite exists.
 
-Each `*.dsui/` directory is a UI component package containing:
-- `manifest.yaml` — bindings, events, regions, metadata
-- `layout.svg` — visual layout
-- Optional asset files (e.g. images)
+## Repo structure
 
-Types: `TouchStripCard` (AudioCard, LightCard) and keys (IconKey, PictureKey). Loaded at runtime via `deckboard.load_package()`.
+- `main.py` — sole entrypoint; all app logic lives here
+- `*.dsui/` — UI packages for the StreamDeck touchscreen/keys. Each contains `manifest.yaml`, `layout.svg`, and optional `assets/`. Loaded at runtime by `deckboard.load_package()`.
+- `IconKey.dsui/` and `LightCard.dsui/` exist but are not currently used in `main.py`
 
 ## Conventions
 
-- No tests, linter, or CI configured
-- `.env` is gitignored; never commit it
+- No linter, formatter, or type checker is configured
+- No tests
+- `.env` is gitignored; never commit credentials

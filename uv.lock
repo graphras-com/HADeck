@@ -365,23 +365,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dsui-collection"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "deckboard" },
-    { name = "ha-client" },
-    { name = "requests" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "deckboard", git = "https://github.com/graphras-com/Deckboard.git" },
-    { name = "ha-client", git = "https://github.com/graphras-com/HAClient.git" },
-    { name = "requests", specifier = ">=2.33.1" },
-]
-
-[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -493,6 +476,23 @@ source = { git = "https://github.com/graphras-com/HAClient.git#b4d2c881eb39e35dc
 dependencies = [
     { name = "aiohttp" },
     { name = "python-dotenv" },
+]
+
+[[package]]
+name = "hadeck"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "deckboard" },
+    { name = "ha-client" },
+    { name = "requests" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "deckboard", git = "https://github.com/graphras-com/Deckboard.git" },
+    { name = "ha-client", git = "https://github.com/graphras-com/HAClient.git" },
+    { name = "requests", specifier = ">=2.33.1" },
 ]
 
 [[package]]

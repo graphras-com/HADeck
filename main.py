@@ -12,7 +12,7 @@ import aiohttp
 from dotenv import load_dotenv
 from PIL import Image
 
-from deckboard import Deck, DsuiCard, DsuiKey, load_package
+from deckboard import DeckManager, DeviceInfo, DsuiCard, DsuiKey, load_package
 from ha_client import HAClient, NowPlaying
 
 import os
@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 PACKAGES_DIR = Path(__file__).parent
 
-STREAMDECK_SERIAL="WA4221NAA3I"
+STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL", "WA4221NAA3I")
 
 # region Helpers
 async def _fetch_image(url: str) -> Image.Image | None:
@@ -80,7 +80,7 @@ async def setup_favorites(screen, player, picturekey_spec):
 class AudioCardController:
     """Manages the AudioCard DSUI widget and its HA media-player bindings."""
 
-    def __init__(self, ha: HAClient, deck: Deck, player, audiocard_spec):
+    def __init__(self, ha: HAClient, deck, player, audiocard_spec):
         self._ha = ha
         self._deck = deck
         self._player = player
@@ -230,44 +230,52 @@ async def run():
     server = os.environ["HA_URL"]
     token = os.environ["HA_TOKEN"]
 
-    async with HAClient(server, token=token) as ha, Deck(brightness=60) as deck:
-        screen = deck.screen("main")
-        if screen.touch_strip is not None:
-            screen.touch_strip.background_color = "#1c1c1c"
+    manager = DeckManager(brightness=60, auto_reconnect=True)
 
+    async with HAClient(server, token=token) as ha:
         player = ha.media_player("study")
 
-        # region Build UI widgets
-        audio_ctrl = AudioCardController(ha, deck, player, audiocard_spec)
-        audio_ctrl.bind_card_events()
-        screen.set_card(0, audio_ctrl.card)
-        # endregion
+        @manager.on_connect(serial=STREAMDECK_SERIAL)
+        async def on_deck_connect(deck):
+            log.info("Deck connected: %s", STREAMDECK_SERIAL)
 
-        # region Initial state load
-        async def load_state():
-            """(Re)load all HA state and refresh the deck."""
-            log.info("Loading Home Assistant state…")
-            await ha.refresh_all()
-            await setup_favorites(screen, player, picturekey_spec)
-            await audio_ctrl.sync_state()
+            screen = deck.screen("main")
+            if screen.touch_strip is not None:
+                screen.touch_strip.background_color = "#1c1c1c"
 
-        await load_state()
-        # endregion
+            # region Build UI widgets
+            audio_ctrl = AudioCardController(ha, deck, player, audiocard_spec)
+            audio_ctrl.bind_card_events()
+            screen.set_card(0, audio_ctrl.card)
+            # endregion
 
-        # region Reconnect watcher
-        reconnect_task = asyncio.create_task(
-            watch_reconnect(ha, load_state)
-        )
-        # endregion
+            # region Load state
+            async def load_state():
+                """(Re)load all HA state and refresh the deck."""
+                log.info("Loading Home Assistant state…")
+                await ha.refresh_all()
+                await setup_favorites(screen, player, picturekey_spec)
+                await audio_ctrl.sync_state()
 
-        # region Activate screen and wait 
-        await deck.set_screen("main")
-        log.info("Deck ready!")
-        # endregion
-        try:
-            await deck.wait_closed()
-        finally:
-            reconnect_task.cancel()
+            await load_state()
+            # endregion
+
+            # region HA reconnect watcher
+            asyncio.create_task(watch_reconnect(ha, load_state))
+            # endregion
+
+            # region Activate screen
+            await deck.set_screen("main")
+            log.info("Deck ready!")
+            # endregion
+
+        @manager.on_disconnect
+        async def on_deck_disconnect(info: DeviceInfo):
+            log.warning("Deck disconnected: %s — waiting for reconnect…", info.serial)
+
+        log.info("Waiting for StreamDeck %s…", STREAMDECK_SERIAL)
+        async with manager:
+            await manager.wait_closed()
 # endregion
 
 # region main

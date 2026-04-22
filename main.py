@@ -1,33 +1,230 @@
 #!/usr/bin/env python3
+"""StreamDeck+ client for Home Assistant."""
 
-from io import BytesIO
-from PIL import Image
+from __future__ import annotations
+
 import asyncio
 import logging
+from io import BytesIO
 from pathlib import Path
-from ha_client import HAClient,NowPlaying
-from deckboard import Deck, DsuiCard, DsuiKey, load_package
-import os
+
+import aiohttp
 from dotenv import load_dotenv
-import requests
+from PIL import Image
+
+from deckboard import Deck, DsuiCard, DsuiKey, load_package
+from ha_client import HAClient, NowPlaying
+
+import os
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-def _load_package(package_name):
-    spec = load_package(Path(__file__).parent / package_name)
-    logging.info(f"Loaded: {spec.name} (v{spec.version})")
-    logging.info(f"  Bindings: {sorted(spec.bindings)}")
-    logging.info(f"  Events:   {[e.name for e in spec.events]}")
-    logging.info(f"  Assets:   {[a for a in spec.assets]}")
-    return spec
+log = logging.getLogger(__name__)
 
-async def main():
-    
-    # region Load Packages
-    audiocard_spec = _load_package("AudioCard.dsui")
-    picturekey_spec = _load_package("PictureKey.dsui")
+PACKAGES_DIR = Path(__file__).parent
+
+STREAMDECK_SERIAL="WA4221NAA3I"
+
+# region Helpers
+async def _fetch_image(url: str) -> Image.Image | None:
+    """Download an image over HTTP without blocking the event loop."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    return Image.open(BytesIO(await resp.read()))
+    except Exception:
+        log.exception("Failed to fetch image: %s", url)
+    return None
+
+
+def _load_dsui(name: str):
+    spec = load_package(PACKAGES_DIR / name)
+    log.info("Loaded: %s (v%s)", spec.name, spec.version)
+    return spec
+# endregion
+
+# region Favorites (keys)
+
+FAVORITE_KEY_SLOTS = [0, 1, 2, 4, 5, 6]
+CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
+
+async def setup_favorites(screen, player, picturekey_spec):
+    """Populate favorite-media keys on the screen."""
+    favs = await player.favorites()
+    favs = sorted(
+        favs,
+        key=lambda f: (CATEGORY_ORDER.get(f.category or "", 99), f.title or ""),
+    )
+
+    for idx, fav in enumerate(favs):
+        if idx >= len(FAVORITE_KEY_SLOTS):
+            break
+        key = DsuiKey(picturekey_spec)
+        if fav.thumbnail is not None:
+            thumb = await _fetch_image(fav.thumbnail)
+            if thumb is not None:
+                key.set("picture", thumb)
+
+        @key.on_event("click")
+        async def _click(media_item=fav.media_content_id):
+            #player.play_media(media_item)
+            log.info("Play: %s", media_item)
+
+        screen.set_key(FAVORITE_KEY_SLOTS[idx], key)
+# endregion
+
+# region Audio card
+class AudioCardController:
+    """Manages the AudioCard DSUI widget and its HA media-player bindings."""
+
+    def __init__(self, ha: HAClient, deck: Deck, player, audiocard_spec):
+        self._ha = ha
+        self._deck = deck
+        self._player = player
+        self._card = DsuiCard(audiocard_spec)
+        self._bind_events()
+
+    @property
+    def card(self) -> DsuiCard:
+        return self._card
+
+    # region initial / reconnect state sync
+    async def sync_state(self):
+        """Read current player state and push it to the card."""
+        player = self._player
+        await player.async_refresh()
+
+        # Now-playing artwork + metadata
+        await self._update_now_playing(player.now_playing)
+
+        # Play / pause label
+        self._card.set("state", "Playing" if player.is_playing else "Paused")
+
+        # Volume
+        volume = player.volume_level or 0.0
+        self._card.set("volume", volume)
+        if player.is_muted:
+            self._card.set("value_text", "Muted")
+        else:
+            self._card.set("value_text", f"{int(volume * 100)}%")
+
+        await self._deck.refresh()
+    # endregion
+
+    # region internal helpers
+    async def _update_now_playing(self, media: NowPlaying):
+        picture = None
+        if media.entity_picture is not None:
+            picture = await _fetch_image(self._ha.base_url + media.entity_picture)
+        self._card.set_many(
+            artist=media.artist,
+            title=media.title,
+            album=media.album,
+            cover=picture,
+        )
+    # endregion
+
+    # region HA event handlers
+    def _bind_events(self):
+        player = self._player
+
+        @player.on_volume_change
+        async def _on_volume(old, new):
+            vol = player.volume_level or 0.0
+            self._card.set("volume", vol)
+            self._card.set("value_text", f"{int(vol * 100)}%")
+            await self._deck.refresh()
+
+        @player.on_mute_change
+        async def _on_mute(old, new):
+            if new:
+                self._card.set("value_text", "Muted")
+            else:
+                vol = player.volume_level or 0.0
+                self._card.set("value_text", f"{int(vol * 100)}%")
+            await self._deck.refresh()
+
+        @player.on_play
+        async def _on_play(old, new):
+            self._card.set("state", "Playing")
+            await self._deck.refresh()
+
+        @player.on_pause
+        async def _on_pause(old, new):
+            self._card.set("state", "Paused")
+            await self._deck.refresh()
+
+        @player.on_media_change
+        async def _on_media(old, new):
+            await self._update_now_playing(new)
+            await self._deck.refresh()
+        #endregion
+
+    # region card UI event handlers
+    def bind_card_events(self):
+        player = self._player
+
+        @self._card.on("toggle_play_pause")
+        async def _toggle():
+            await player.play_pause()
+
+        @self._card.on("volume_up")
+        async def _up():
+            await self._deck.refresh()
+
+        @self._card.on("volume_down")
+        async def _down():
+            await self._deck.refresh()
+
+        @self._card.on("mute_toggle")
+        async def _mute():
+            await player.mute(not player.is_muted)
+
+        @self._card.on("next")
+        async def _next():
+            pass
+
+        @self._card.on("previous")
+        async def _prev():
+            pass
+        # endregion
+# endregion
+
+# region Reconnection watcher
+async def watch_reconnect(ha: HAClient, on_reconnected):
+    """Wait for WS disconnect, then wait for reconnect, and call callback.
+
+    The HAClient WS layer reconnects automatically and re-subscribes events,
+    but entity *state* is stale until we explicitly refresh.
+    """
+    reconnected = asyncio.Event()
+
+    @ha.ws.on_disconnect
+    def _on_drop():
+        log.warning("Home Assistant WebSocket disconnected")
+        reconnected.clear()
+        # Start polling for reconnection in a task
+        asyncio.create_task(_wait_for_reconnect())
+
+    async def _wait_for_reconnect():
+        # Poll until the WS is connected again
+        while not ha.ws.connected:
+            await asyncio.sleep(1)
+        log.info("Home Assistant WebSocket reconnected")
+        await on_reconnected()
+
+    # Keep this coroutine alive for the lifetime of the app
+    await asyncio.Event().wait()
+# endregion
+
+# region Application
+async def run():
+    # region Load DSUI packages
+    audiocard_spec = _load_dsui("AudioCard.dsui")
+    picturekey_spec = _load_dsui("PictureKey.dsui")
     # endregion
 
     server = os.environ["HA_URL"]
@@ -35,124 +232,49 @@ async def main():
 
     async with HAClient(server, token=token) as ha, Deck(brightness=60) as deck:
         screen = deck.screen("main")
-
         if screen.touch_strip is not None:
             screen.touch_strip.background_color = "#1c1c1c"
 
         player = ha.media_player("study")
-        await player.async_refresh()
 
-        favs = await player.favorites()
-        favkeys = [0, 1, 2, 4, 5, 6]
-
-        category_order = {"Radio": 0, "Playlists": 1, "Albums": 2}
-        favs = sorted(
-            favs,
-            key=lambda f: (category_order.get(f.category or "", 99), f.title or ""),
-        )
-
-        for key_index, fav in enumerate(favs):
-            if key_index >= len(favkeys):
-                break
-            f = DsuiKey(picturekey_spec)
-            # Leave Label Empty
-            f.set("label", "")
-            if fav.thumbnail is not None:
-                thumbnail = Image.open(BytesIO(requests.get(fav.thumbnail).content))
-                f.set("picture", thumbnail)
-
-            @f.on_event("click")
-            async def f_click(media_item=fav.media_content_id):
-                logging.info(f"Play: {media_item}")
-
-            screen.set_key(favkeys[key_index], f)
-
-        # region AudioCard
-        audio = DsuiCard(audiocard_spec)
-
-        async def update_playing_media(media:NowPlaying):
-            picture = None
-            if media.entity_picture is not None:
-                picture_url = ha.base_url + media.entity_picture
-                picture = Image.open(BytesIO(requests.get(picture_url).content))
-            audio.set_many(artist=media.artist, title=media.title, album=media.album, cover=picture)
-            await deck.refresh()
-
-        await update_playing_media(player.now_playing)
-
-        audio.set("state", "Playing" if player.is_playing else "Paused")
-
-        # Volume
-        volume = player.volume_level or 0.0
-        audio.set("volume", volume)
-
-        if player.is_muted:
-            audio.set("value_text", "Muted")
-        else:
-            audio.set("value_text", f"{int(volume * 100)}%")
-        
-        screen.set_card(0, audio)
-
-        @player.on_volume_change
-        async def on_volume_change(old, new):
-            print(old);
-            print(new)
-            volume = player.volume_level or 0.0
-            audio.set("volume", volume)
-            audio.set("value_text", f"{int(volume * 100)}%")
-            await deck.refresh()
-
-        @player.on_mute_change
-        async def on_mute_change(old, new):
-            if new:
-                audio.set("value_text", "Muted")
-            else:
-                audio.set("value_text", f"{int(volume * 100)}%")
-            await deck.refresh()
-
-        @player.on_play
-        async def on_play(old, new):
-            audio.set("state", "Playing")
-            await deck.refresh()
-
-        @player.on_pause
-        async def on_pause(old, new):
-            audio.set("state", "Paused")
-            await deck.refresh()
-
-        @player.on_media_change
-        async def on_media_change(old, new):
-            await update_playing_media(new)
-                      
-        @audio.on("toggle_play_pause")
-        async def on_toggle():
-            await player.play_pause()
-
-        @audio.on("volume_up")
-        async def on_up():
-            await deck.refresh()
-
-        @audio.on("volume_down")
-        async def on_down():
-            await deck.refresh()
-
-        @audio.on("mute_toggle")
-        async def on_toggle_mute():
-            new_state = not player.is_muted
-            await player.mute(new_state)
-
-        @audio.on("next")
-        async def on_next():
-            pass
-
-        @audio.on("previous")
-        async def on_prev():
-            pass
+        # region Build UI widgets
+        audio_ctrl = AudioCardController(ha, deck, player, audiocard_spec)
+        audio_ctrl.bind_card_events()
+        screen.set_card(0, audio_ctrl.card)
         # endregion
 
+        # region Initial state load
+        async def load_state():
+            """(Re)load all HA state and refresh the deck."""
+            log.info("Loading Home Assistant state…")
+            await ha.refresh_all()
+            await setup_favorites(screen, player, picturekey_spec)
+            await audio_ctrl.sync_state()
+
+        await load_state()
+        # endregion
+
+        # region Reconnect watcher
+        reconnect_task = asyncio.create_task(
+            watch_reconnect(ha, load_state)
+        )
+        # endregion
+
+        # region Activate screen and wait 
         await deck.set_screen("main")
-        print("Deck ready!")
-        await deck.wait_closed()
+        log.info("Deck ready!")
+        # endregion
+        try:
+            await deck.wait_closed()
+        finally:
+            reconnect_task.cancel()
+# endregion
+
+# region main
+def main():
+    asyncio.run(run())
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
+# endregion

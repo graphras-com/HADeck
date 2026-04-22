@@ -75,28 +75,27 @@ async def setup_favorites(screen, player, picturekey_spec):
 # endregion
 
 # region Audio card
-class VolumeAccumulator:
-    """Collect rapid volume-change ticks and flush them as one HA call.
+class DialAccumulator:
+    """Debounce rapid dial/encoder ticks and flush them with a single callback.
 
-    *delay*  – seconds to wait after the last tick before flushing.
-    *max_steps* – cap on how many ticks can accumulate (positive number).
-                  Prevents the user from accidentally cranking the volume.
-    *step*  – volume change per tick (0-1 float, default 0.01 = 1 %).
+    *callback*   – ``async def callback(steps: int)`` called once per flush
+                   with the net accumulated tick count (signed).
+    *delay*      – seconds to wait after the last tick before flushing.
+    *max_steps*  – cap on how many ticks can accumulate (positive number).
+                   Use ``max_steps=1`` to collapse any number of ticks into
+                   a single +1 / -1 event (useful for next/previous).
     """
 
-    def __init__(self, player, *, delay: float = 0.25, max_steps: int = 10, step: float = 0.01):
-        self._player = player
+    def __init__(self, callback, *, delay: float = 0.25, max_steps: int = 10):
+        self._callback = callback
         self._delay = delay
         self._max_steps = max_steps
-        self._step = step
-        self._pending: int = 0          # accumulated tick count (signed)
+        self._pending: int = 0
         self._flush_task: asyncio.Task | None = None
 
     def tick(self, direction: int):
-        """Add +1 (up) or -1 (down). Clamps to ±max_steps."""
+        """Add +1 or -1. Clamps to ±max_steps."""
         self._pending = max(-self._max_steps, min(self._max_steps, self._pending + direction))
-
-        # (Re)start the flush timer
         if self._flush_task is not None:
             self._flush_task.cancel()
         self._flush_task = asyncio.create_task(self._schedule_flush())
@@ -113,11 +112,7 @@ class VolumeAccumulator:
         self._pending = 0
         if steps == 0:
             return
-        delta = steps * self._step
-        current = self._player.volume_level or 0.0
-        target = max(0.0, min(1.0, current + delta))
-        log.info("Volume flush: %+d steps → %.0f%%", steps, target * 100)
-        await self._player.set_volume(target)
+        await self._callback(steps)
 
 
 class AudioCardController:
@@ -128,8 +123,24 @@ class AudioCardController:
         self._deck = deck
         self._player = player
         self._card = DsuiCard(audiocard_spec)
-        self._volume_acc = VolumeAccumulator(player)
+        self._volume_acc = DialAccumulator(self._flush_volume, max_steps=10)
+        self._skip_acc = DialAccumulator(self._flush_skip, max_steps=1)
         self._bind_events()
+
+    async def _flush_volume(self, steps: int):
+        step = 0.01
+        current = self._player.volume_level or 0.0
+        target = max(0.0, min(1.0, current + steps * step))
+        log.info("Volume flush: %+d steps → %.0f%%", steps, target * 100)
+        await self._player.set_volume(target)
+
+    async def _flush_skip(self, direction: int):
+        if direction > 0:
+            log.info("Skip flush: next")
+            await self._player.next()
+        else:
+            log.info("Skip flush: previous")
+            await self._player.previous()
 
     @property
     def card(self) -> DsuiCard:
@@ -229,11 +240,13 @@ class AudioCardController:
 
         @self._card.on("next")
         async def _next():
-            pass
+            if player.now_playing.next:
+                self._skip_acc.tick(+1)
 
         @self._card.on("previous")
         async def _prev():
-            pass
+            if player.now_playing.previous:
+                self._skip_acc.tick(-1)
         # endregion
 # endregion
 

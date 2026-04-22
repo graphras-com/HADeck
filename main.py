@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 PACKAGES_DIR = Path(__file__).parent
 STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
 MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
+UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "light.upstairs")
 
 # region Helpers
 async def _fetch_image(url: str) -> Image.Image | None:
@@ -250,6 +251,127 @@ class AudioCardController:
         # endregion
 # endregion
 
+# region Light card
+class LightCardController:
+    """Manages the LightCard DSUI widget and its HA light bindings."""
+
+    MIN_KELVIN = 2000
+    MAX_KELVIN = 6500
+
+    def __init__(self, ha: HAClient, deck, light, lightcard_spec):
+        self._ha = ha
+        self._deck = deck
+        self._light = light
+        self._card = DsuiCard(lightcard_spec)
+        self._brightness_acc = DialAccumulator(self._flush_brightness, max_steps=10)
+        self._kelvin_acc = DialAccumulator(self._flush_kelvin, max_steps=10)
+        self._bind_events()
+
+    @property
+    def card(self) -> DsuiCard:
+        return self._card
+
+    # region flush helpers
+    async def _flush_brightness(self, steps: int):
+        step = 0.05
+        current = (self._light.brightness or 0) / 255.0
+        target = max(0.0, min(1.0, current + steps * step))
+        brightness = int(target * 255)
+        log.info("Brightness flush: %+d steps → %d%%", steps, int(target * 100))
+        await self._light.turn_on(brightness=brightness)
+
+    async def _flush_kelvin(self, steps: int):
+        step = 250
+        attrs = self._light.attributes
+        current = attrs.get("color_temp_kelvin", self.MIN_KELVIN)
+        min_k = attrs.get("min_color_temp_kelvin", self.MIN_KELVIN)
+        max_k = attrs.get("max_color_temp_kelvin", self.MAX_KELVIN)
+        target = max(min_k, min(max_k, current + steps * step))
+        log.info("Kelvin flush: %+d steps → %dK", steps, target)
+        await self._light.turn_on(color_temp_kelvin=int(target))
+    # endregion
+
+    # region state sync
+    async def sync_state(self):
+        await self._light.async_refresh()
+        self._update_card_from_state()
+        await self._deck.refresh()
+
+    def _update_card_from_state(self):
+        light = self._light
+        self._card.set("lights", light.is_on)
+
+        brightness = light.brightness or 0
+        brightness_pct = brightness / 255.0
+        self._card.set("brightness", brightness_pct)
+        self._card.set("brightness_value_text", f"{int(brightness_pct * 100)}%")
+
+        attrs = light.attributes
+        kelvin = attrs.get("color_temp_kelvin", self.MIN_KELVIN)
+        min_k = attrs.get("min_color_temp_kelvin", self.MIN_KELVIN)
+        max_k = attrs.get("max_color_temp_kelvin", self.MAX_KELVIN)
+        kelvin_range = max_k - min_k
+        kelvin_pct = (kelvin - min_k) / kelvin_range if kelvin_range > 0 else 0.0
+        self._card.set("kelvin", kelvin_pct)
+        self._card.set("kelvin_value_text", f"{int(kelvin)}K")
+    # endregion
+
+    # region HA event handlers
+    def _bind_events(self):
+        light = self._light
+
+        @light.on_turn_on
+        async def _on_turn_on(old, new):
+            self._update_card_from_state()
+            await self._deck.refresh()
+
+        @light.on_turn_off
+        async def _on_turn_off(old, new):
+            self._update_card_from_state()
+            await self._deck.refresh()
+
+        @light.on_brightness_change
+        async def _on_brightness(old, new):
+            self._update_card_from_state()
+            await self._deck.refresh()
+
+        @light.on_color_change
+        async def _on_color(old, new):
+            self._update_card_from_state()
+            await self._deck.refresh()
+
+        # Track color_temp_kelvin changes (not covered by on_color_change)
+        async def _on_kelvin(old, new):
+            self._update_card_from_state()
+            await self._deck.refresh()
+
+        light._register_attr_listener("color_temp_kelvin", _on_kelvin)
+    # endregion
+
+    # region card UI event handlers
+    def bind_card_events(self):
+        @self._card.on("toggle")
+        async def _toggle():
+            await self._light.toggle()
+
+        @self._card.on("brightness_up")
+        async def _brightness_up():
+            self._brightness_acc.tick(+1)
+
+        @self._card.on("brightness_down")
+        async def _brightness_down():
+            self._brightness_acc.tick(-1)
+
+        @self._card.on("kelvin_up")
+        async def _kelvin_up():
+            self._kelvin_acc.tick(+1)
+
+        @self._card.on("kelvin_down")
+        async def _kelvin_down():
+            self._kelvin_acc.tick(-1)
+    # endregion
+# endregion
+
 # region Reconnection watcher
 async def watch_reconnect(ha: HAClient, on_reconnected):
     """Wait for WS disconnect, then wait for reconnect, and call callback.
@@ -282,6 +404,7 @@ async def run():
     # region Load DSUI packages
     audiocard_spec = _load_dsui("AudioCard.dsui")
     picturekey_spec = _load_dsui("PictureKey.dsui")
+    lightcard_spec = _load_dsui("LightCard.dsui")
     # endregion
 
     server = os.environ["HA_URL"]
@@ -291,6 +414,7 @@ async def run():
 
     async with HAClient(server, token=token) as ha:
         player = ha.media_player(MEDIA_PLAYER)
+        upstairs = ha.light(UPSTAIRS_LIGHTS)
 
         @manager.on_connect(serial=STREAMDECK_SERIAL)
         async def on_deck_connect(deck):
@@ -304,6 +428,10 @@ async def run():
             audio_ctrl = AudioCardController(ha, deck, player, audiocard_spec)
             audio_ctrl.bind_card_events()
             screen.set_card(0, audio_ctrl.card)
+
+            light_ctrl = LightCardController(ha, deck, upstairs, lightcard_spec)
+            light_ctrl.bind_card_events()
+            screen.set_card(1, light_ctrl.card)
             # endregion
 
             # region Load state
@@ -313,6 +441,7 @@ async def run():
                 await ha.refresh_all()
                 await setup_favorites(screen, player, picturekey_spec)
                 await audio_ctrl.sync_state()
+                await light_ctrl.sync_state()
 
             await load_state()
             # endregion

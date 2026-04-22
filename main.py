@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 PACKAGES_DIR = Path(__file__).parent
 STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
-MEDIA_PLAYER= "entertainment"
+MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
 
 # region Helpers
 async def _fetch_image(url: str) -> Image.Image | None:

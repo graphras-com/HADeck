@@ -284,7 +284,7 @@ class LightCardController:
         max_k = self._light.max_kelvin
         target = max(min_k, min(max_k, current + steps * step))
         log.info("Kelvin flush: %+d steps → %dK", steps, target)
-        await self._light.set_kelvin(int(target))
+        await self._light.turn_on(kelvin=int(target))
     # endregion
 
     # region state sync

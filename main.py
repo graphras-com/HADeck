@@ -67,9 +67,9 @@ async def setup_favorites(screen, player, picturekey_spec):
                 key.set("picture", thumb)
 
         @key.on_event("click")
-        async def _click(media_item=fav.media_content_id):
-            #player.play_media(media_item)
-            log.info("Play: %s", media_item)
+        async def _click(item=fav):
+            log.info("Play: %s", item.title)
+            await item.play()
 
         screen.set_key(FAVORITE_KEY_SLOTS[idx], key)
 # endregion

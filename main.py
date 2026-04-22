@@ -255,9 +255,6 @@ class AudioCardController:
 class LightCardController:
     """Manages the LightCard DSUI widget and its HA light bindings."""
 
-    MIN_KELVIN = 2000
-    MAX_KELVIN = 6500
-
     def __init__(self, ha: HAClient, deck, light, lightcard_spec):
         self._ha = ha
         self._deck = deck
@@ -282,13 +279,12 @@ class LightCardController:
 
     async def _flush_kelvin(self, steps: int):
         step = 250
-        attrs = self._light.attributes
-        current = attrs.get("color_temp_kelvin", self.MIN_KELVIN)
-        min_k = attrs.get("min_color_temp_kelvin", self.MIN_KELVIN)
-        max_k = attrs.get("max_color_temp_kelvin", self.MAX_KELVIN)
+        current = self._light.kelvin or self._light.min_kelvin
+        min_k = self._light.min_kelvin
+        max_k = self._light.max_kelvin
         target = max(min_k, min(max_k, current + steps * step))
         log.info("Kelvin flush: %+d steps → %dK", steps, target)
-        await self._light.turn_on(color_temp_kelvin=int(target))
+        await self._light.set_kelvin(int(target))
     # endregion
 
     # region state sync
@@ -306,10 +302,9 @@ class LightCardController:
         self._card.set("brightness", brightness_pct)
         self._card.set("brightness_value_text", f"{int(brightness_pct * 100)}%")
 
-        attrs = light.attributes
-        kelvin = attrs.get("color_temp_kelvin", self.MIN_KELVIN)
-        min_k = attrs.get("min_color_temp_kelvin", self.MIN_KELVIN)
-        max_k = attrs.get("max_color_temp_kelvin", self.MAX_KELVIN)
+        kelvin = light.kelvin or light.min_kelvin
+        min_k = light.min_kelvin
+        max_k = light.max_kelvin
         kelvin_range = max_k - min_k
         kelvin_pct = (kelvin - min_k) / kelvin_range if kelvin_range > 0 else 0.0
         self._card.set("kelvin", kelvin_pct)
@@ -340,12 +335,10 @@ class LightCardController:
             self._update_card_from_state()
             await self._deck.refresh()
 
-        # Track color_temp_kelvin changes (not covered by on_color_change)
+        @light.on_kelvin_change
         async def _on_kelvin(old, new):
             self._update_card_from_state()
             await self._deck.refresh()
-
-        light._register_attr_listener("color_temp_kelvin", _on_kelvin)
     # endregion
 
     # region card UI event handlers

@@ -487,7 +487,7 @@ wheels = [
 [[package]]
 name = "ha-client"
 version = "0.1.0"
-source = { git = "https://github.com/graphras-com/HAClient.git#f90cb5f5cf42e09f2ab54afcc594a8cff777c207" }
+source = { git = "https://github.com/graphras-com/HAClient.git#9c4f371ee965ed7486caf17b377d54c3cf0fcf12" }
 dependencies = [
     { name = "aiohttp" },
     { name = "python-dotenv" },

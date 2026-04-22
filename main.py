@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 PACKAGES_DIR = Path(__file__).parent
-
-STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL", "WA4221NAA3I")
+STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
+MEDIA_PLAYER= "entertainment"
 
 # region Helpers
 async def _fetch_image(url: str) -> Image.Image | None:
@@ -39,7 +39,6 @@ async def _fetch_image(url: str) -> Image.Image | None:
         log.exception("Failed to fetch image: %s", url)
     return None
 
-
 def _load_dsui(name: str):
     spec = load_package(PACKAGES_DIR / name)
     log.info("Loaded: %s (v%s)", spec.name, spec.version)
@@ -47,7 +46,6 @@ def _load_dsui(name: str):
 # endregion
 
 # region Favorites (keys)
-
 FAVORITE_KEY_SLOTS = [0, 1, 2, 4, 5, 6]
 CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
 
@@ -173,11 +171,13 @@ class AudioCardController:
 
         @self._card.on("volume_up")
         async def _up():
-            await self._deck.refresh()
+            vol = min(1.0, (player.volume_level or 0.0) + 0.01)
+            await player.set_volume(vol)
 
         @self._card.on("volume_down")
         async def _down():
-            await self._deck.refresh()
+            vol = max(0.0, (player.volume_level or 0.0) - 0.01)
+            await player.set_volume(vol)
 
         @self._card.on("mute_toggle")
         async def _mute():
@@ -233,7 +233,7 @@ async def run():
     manager = DeckManager(brightness=60, auto_reconnect=True)
 
     async with HAClient(server, token=token) as ha:
-        player = ha.media_player("study")
+        player = ha.media_player(MEDIA_PLAYER)
 
         @manager.on_connect(serial=STREAMDECK_SERIAL)
         async def on_deck_connect(deck):

@@ -75,6 +75,51 @@ async def setup_favorites(screen, player, picturekey_spec):
 # endregion
 
 # region Audio card
+class VolumeAccumulator:
+    """Collect rapid volume-change ticks and flush them as one HA call.
+
+    *delay*  – seconds to wait after the last tick before flushing.
+    *max_steps* – cap on how many ticks can accumulate (positive number).
+                  Prevents the user from accidentally cranking the volume.
+    *step*  – volume change per tick (0-1 float, default 0.01 = 1 %).
+    """
+
+    def __init__(self, player, *, delay: float = 0.25, max_steps: int = 10, step: float = 0.01):
+        self._player = player
+        self._delay = delay
+        self._max_steps = max_steps
+        self._step = step
+        self._pending: int = 0          # accumulated tick count (signed)
+        self._flush_task: asyncio.Task | None = None
+
+    def tick(self, direction: int):
+        """Add +1 (up) or -1 (down). Clamps to ±max_steps."""
+        self._pending = max(-self._max_steps, min(self._max_steps, self._pending + direction))
+
+        # (Re)start the flush timer
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+        self._flush_task = asyncio.create_task(self._schedule_flush())
+
+    async def _schedule_flush(self):
+        try:
+            await asyncio.sleep(self._delay)
+            await self._flush()
+        except asyncio.CancelledError:
+            pass
+
+    async def _flush(self):
+        steps = self._pending
+        self._pending = 0
+        if steps == 0:
+            return
+        delta = steps * self._step
+        current = self._player.volume_level or 0.0
+        target = max(0.0, min(1.0, current + delta))
+        log.info("Volume flush: %+d steps → %.0f%%", steps, target * 100)
+        await self._player.set_volume(target)
+
+
 class AudioCardController:
     """Manages the AudioCard DSUI widget and its HA media-player bindings."""
 
@@ -83,6 +128,7 @@ class AudioCardController:
         self._deck = deck
         self._player = player
         self._card = DsuiCard(audiocard_spec)
+        self._volume_acc = VolumeAccumulator(player)
         self._bind_events()
 
     @property
@@ -171,13 +217,11 @@ class AudioCardController:
 
         @self._card.on("volume_up")
         async def _up():
-            vol = min(1.0, (player.volume_level or 0.0) + 0.01)
-            await player.set_volume(vol)
+            self._volume_acc.tick(+1)
 
         @self._card.on("volume_down")
         async def _down():
-            vol = max(0.0, (player.volume_level or 0.0) - 0.01)
-            await player.set_volume(vol)
+            self._volume_acc.tick(-1)
 
         @self._card.on("mute_toggle")
         async def _mute():

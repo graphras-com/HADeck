@@ -5,13 +5,13 @@ description = "StreamDeck+ Client for Homeassistant"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "deckboard",
+    "deckui",
     "ha_client",
     "aiohttp>=3.9",
 ]
 
 [tool.uv.sources]
-deckboard = { git = "https://github.com/graphras-com/Deckboard.git" }
+deckui = { git = "https://github.com/graphras-com/DeckUI.git" }
 ha_client = { git = "https://github.com/graphras-com/HAClient.git" }
 
 [dependency-groups]

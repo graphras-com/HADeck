@@ -47,7 +47,7 @@ def _load_dsui(name: str):
 # endregion
 
 # region Favorites (keys)
-FAVORITE_KEY_SLOTS = [0, 1, 2, 4, 5, 6]
+FAVORITE_KEY_SLOTS = [0, 1, 4, 5]
 CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
 
 async def setup_favorites(screen, player, picturekey_spec):
@@ -261,7 +261,7 @@ class LightCardController:
         self._light = light
         self._card = DsuiCard(lightcard_spec)
         self._brightness_acc = DialAccumulator(self._flush_brightness, max_steps=10)
-        self._kelvin_acc = DialAccumulator(self._flush_kelvin, max_steps=10)
+        self._kelvin_acc = DialAccumulator(self._flush_kelvin, max_steps=1)
         self._bind_events()
 
     @property

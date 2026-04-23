@@ -360,9 +360,9 @@ wheels = [
 ]
 
 [[package]]
-name = "deckboard"
+name = "deckui"
 version = "0.1.0"
-source = { git = "https://github.com/graphras-com/Deckboard.git#60d887f079edf6c9f3113c6eb708f72edf123b78" }
+source = { git = "https://github.com/graphras-com/DeckUI.git#b60674a9a9f3a7cb660cc49ce00c75c385cf641d" }
 dependencies = [
     { name = "cairosvg" },
     { name = "pillow" },
@@ -499,7 +499,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
-    { name = "deckboard" },
+    { name = "deckui" },
     { name = "ha-client" },
 ]
 
@@ -513,7 +513,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
-    { name = "deckboard", git = "https://github.com/graphras-com/Deckboard.git" },
+    { name = "deckui", git = "https://github.com/graphras-com/DeckUI.git" },
     { name = "ha-client", git = "https://github.com/graphras-com/HAClient.git" },
 ]
 

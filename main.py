@@ -423,12 +423,14 @@ class DashboardCardController:
 
         @self._temp_sensor.on_state_change
         async def _on_temp(old, new):
-            self._card.set("temperature", f"{new}°")
+            state = new["state"] if isinstance(new, dict) else new
+            self._card.set("temperature", f"{state}°")
             await self._deck.refresh()
 
         @self._humidity_sensor.on_state_change
         async def _on_humidity(old, new):
-            self._card.set("humidity", f"{new}%")
+            state = new["state"] if isinstance(new, dict) else new
+            self._card.set("humidity", f"{state}%")
             await self._deck.refresh()
 
     def bind_card_events(self):

@@ -417,7 +417,8 @@ class DashboardCardController:
     def _bind_events(self):
         @self._datetime_sensor.on_state_change
         async def _on_datetime(old, new):
-            self._format_datetime(new)
+            state = new["state"] if isinstance(new, dict) else new
+            self._format_datetime(state)
             await self._deck.refresh()
 
         @self._temp_sensor.on_state_change

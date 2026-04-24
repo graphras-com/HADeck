@@ -6,13 +6,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "deckui",
-    "ha_client",
+    "haclient",
     "aiohttp>=3.9",
+    "dotenv>=0.9.9",
 ]
 
 [tool.uv.sources]
 deckui = { git = "https://github.com/graphras-com/DeckUI.git" }
-ha_client = { git = "https://github.com/graphras-com/HaClient.git" }
+haclient = { git = "https://github.com/graphras-com/HaClient.git" }
 
 [dependency-groups]
 dev = [

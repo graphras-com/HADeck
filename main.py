@@ -12,8 +12,8 @@ import aiohttp
 from dotenv import load_dotenv
 from PIL import Image
 
-from deckboard import DeckManager, DeviceInfo, DsuiCard, DsuiKey, load_package
-from ha_client import HAClient, NowPlaying
+from deckui import DeckManager, DeviceInfo, DuiCard, DuiKey, load_package
+from haclient import HAClient, NowPlaying
 
 import os
 
@@ -40,10 +40,21 @@ async def _fetch_image(url: str) -> Image.Image | None:
         log.exception("Failed to fetch image: %s", url)
     return None
 
-def _load_dsui(name: str):
-    spec = load_package(PACKAGES_DIR / name)
-    log.info("Loaded: %s (v%s)", spec.name, spec.version)
-    return spec
+# region Scenes (keys)
+SCENES = {2:"Morning", 3:"Day", 6:"Evening", 7:"Cinema"}
+
+async def setup_scenes(screen, iconkey_spec):
+    """Populate scenes keys on the screen."""
+    for idx, scene in SCENES.items():
+        key = DuiKey(iconkey_spec)
+        key.set("icon", "mdi:cinema")
+        key.set("label", scene)
+
+        @key.on_event("click")
+        async def _click(item=scene):
+            log.info("Activate: %s", item)
+
+        screen.set_key(idx, key)
 # endregion
 
 # region Favorites (keys)
@@ -61,7 +72,7 @@ async def setup_favorites(screen, player, picturekey_spec):
     for idx, fav in enumerate(favs):
         if idx >= len(FAVORITE_KEY_SLOTS):
             break
-        key = DsuiKey(picturekey_spec)
+        key = DuiKey(picturekey_spec)
         if fav.thumbnail is not None:
             thumb = await _fetch_image(fav.thumbnail)
             if thumb is not None:
@@ -117,13 +128,13 @@ class DialAccumulator:
 
 
 class AudioCardController:
-    """Manages the AudioCard DSUI widget and its HA media-player bindings."""
+    """Manages the AudioCard DUI widget and its HA media-player bindings."""
 
     def __init__(self, ha: HAClient, deck, player, audiocard_spec):
         self._ha = ha
         self._deck = deck
         self._player = player
-        self._card = DsuiCard(audiocard_spec)
+        self._card = DuiCard(audiocard_spec)
         self._volume_acc = DialAccumulator(self._flush_volume, max_steps=10)
         self._skip_acc = DialAccumulator(self._flush_skip, max_steps=1)
         self._bind_events()
@@ -144,7 +155,7 @@ class AudioCardController:
             await self._player.previous()
 
     @property
-    def card(self) -> DsuiCard:
+    def card(self) -> DuiCard:
         return self._card
 
     # region initial / reconnect state sync
@@ -253,19 +264,19 @@ class AudioCardController:
 
 # region Light card
 class LightCardController:
-    """Manages the LightCard DSUI widget and its HA light bindings."""
+    """Manages the LightCard DUI widget and its HA light bindings."""
 
     def __init__(self, ha: HAClient, deck, light, lightcard_spec):
         self._ha = ha
         self._deck = deck
         self._light = light
-        self._card = DsuiCard(lightcard_spec)
+        self._card = DuiCard(lightcard_spec)
         self._brightness_acc = DialAccumulator(self._flush_brightness, max_steps=10)
         self._kelvin_acc = DialAccumulator(self._flush_kelvin, max_steps=1)
         self._bind_events()
 
     @property
-    def card(self) -> DsuiCard:
+    def card(self) -> DuiCard:
         return self._card
 
     # region flush helpers
@@ -365,6 +376,81 @@ class LightCardController:
     # endregion
 # endregion
 
+# region Dashboard card
+class DashboardCardController:
+    """Manages the DashboardCard DUI widget."""
+
+    def __init__(self, ha: HAClient, deck, dashboardcard_spec):
+        self._ha = ha
+        self._deck = deck
+        self._card = DuiCard(dashboardcard_spec)
+        self._brightness_acc = DialAccumulator(self._flush_brightness, max_steps=10)
+        self._datetime_sensor = ha.sensor("sensor.date_time")
+        self._temp_sensor = ha.sensor("sensor.livingroom_temperature")
+        self._humidity_sensor = ha.sensor("sensor.livingroom_humidity")
+        self._bind_events()
+
+    @property
+    def card(self) -> DuiCard:
+        return self._card
+
+    async def _flush_brightness(self, steps: int):
+        step = 0.05
+        current = self._deck.brightness / 100.0
+        target = max(0.0, min(1.0, current + steps * step))
+        brightness = int(target * 100)
+        log.info("Deck brightness flush: %+d steps → %d%%", steps, brightness)
+        await self._deck.set_brightness(brightness)
+        self._card.set("deck_brightness", target)
+        await self._deck.refresh()
+
+    def _format_datetime(self, value: str):
+        """Parse 'YYYY-MM-DD, HH:MM' from sensor.date_time and update card."""
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(value, "%Y-%m-%d, %H:%M")
+            self._card.set("date", dt.strftime("%A, %d %b"))
+            self._card.set("time", dt.strftime("%H:%M"))
+        except (ValueError, TypeError):
+            log.warning("Could not parse date_time: %s", value)
+
+    def _bind_events(self):
+        @self._datetime_sensor.on_state_change
+        async def _on_datetime(old, new):
+            self._format_datetime(new)
+            await self._deck.refresh()
+
+        @self._temp_sensor.on_state_change
+        async def _on_temp(old, new):
+            self._card.set("temperature", f"{new}°")
+            await self._deck.refresh()
+
+        @self._humidity_sensor.on_state_change
+        async def _on_humidity(old, new):
+            self._card.set("humidity", f"{new}%")
+            await self._deck.refresh()
+
+    def bind_card_events(self):
+        @self._card.on("brightness_up")
+        async def _up():
+            self._brightness_acc.tick(+1)
+
+        @self._card.on("brightness_down")
+        async def _down():
+            self._brightness_acc.tick(-1)
+
+    async def sync_state(self):
+        await self._datetime_sensor.async_refresh()
+        await self._temp_sensor.async_refresh()
+        await self._humidity_sensor.async_refresh()
+
+        self._format_datetime(self._datetime_sensor.state)
+        self._card.set("temperature", f"{self._temp_sensor.state}°")
+        self._card.set("humidity", f"{self._humidity_sensor.state}%")
+        self._card.set("deck_brightness", self._deck.brightness / 100.0)
+        await self._deck.refresh()
+# endregion
+
 # region Reconnection watcher
 async def watch_reconnect(ha: HAClient, on_reconnected):
     """Wait for WS disconnect, then wait for reconnect, and call callback.
@@ -394,10 +480,12 @@ async def watch_reconnect(ha: HAClient, on_reconnected):
 
 # region Application
 async def run():
-    # region Load DSUI packages
-    audiocard_spec = _load_dsui("AudioCard.dsui")
-    picturekey_spec = _load_dsui("PictureKey.dsui")
-    lightcard_spec = _load_dsui("LightCard.dsui")
+    # region Load DUI packages
+    audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
+    picturekey_spec = load_package(PACKAGES_DIR / "PictureKey.dui")
+    iconkey_spec = load_package(PACKAGES_DIR / "IconKey.dui")
+    lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
+    dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
     # endregion
 
     server = os.environ["HA_URL"]
@@ -425,6 +513,10 @@ async def run():
             light_ctrl = LightCardController(ha, deck, upstairs, lightcard_spec)
             light_ctrl.bind_card_events()
             screen.set_card(1, light_ctrl.card)
+
+            dash_ctrl = DashboardCardController(ha, deck, dashboardcard_spec)
+            dash_ctrl.bind_card_events()
+            screen.set_card(3, dash_ctrl.card)
             # endregion
 
             # region Load state
@@ -433,8 +525,10 @@ async def run():
                 log.info("Loading Home Assistant state…")
                 await ha.refresh_all()
                 await setup_favorites(screen, player, picturekey_spec)
+                await setup_scenes(screen, iconkey_spec)
                 await audio_ctrl.sync_state()
                 await light_ctrl.sync_state()
+                await dash_ctrl.sync_state()
 
             await load_state()
             # endregion

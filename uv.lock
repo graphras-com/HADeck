@@ -362,7 +362,7 @@ wheels = [
 [[package]]
 name = "deckui"
 version = "0.1.0"
-source = { git = "https://github.com/graphras-com/DeckUI.git#3b6972c35491eb0c9e110f3709b60f43aa6a58ac" }
+source = { git = "https://github.com/graphras-com/DeckUI.git#2ae5700ea918632ae380c3ef893c3515ca2ec21c" }
 dependencies = [
     { name = "cairosvg" },
     { name = "pillow" },

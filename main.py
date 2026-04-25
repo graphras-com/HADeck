@@ -95,10 +95,10 @@ async def setup_favorites(screen, player, picturekey_spec):
 class DialAccumulator:
     """Debounce rapid dial/encoder ticks and flush them with a single callback.
 
-    *callback*   – ``async def callback(steps: int)`` called once per flush
+    *callback*   - ``async def callback(steps: int)`` called once per flush
                    with the net accumulated tick count (signed).
-    *delay*      – seconds to wait after the last tick before flushing.
-    *max_steps*  – cap on how many ticks can accumulate (positive number).
+    *delay*      - seconds to wait after the last tick before flushing.
+    *max_steps*  - cap on how many ticks can accumulate (positive number).
                    Use ``max_steps=1`` to collapse any number of ticks into
                    a single +1 / -1 event (useful for next/previous).
     """
@@ -389,7 +389,7 @@ class DashboardCardController:
         self._ha = ha
         self._deck = deck
         self._card = DuiCard(dashboardcard_spec)
-        self._brightness_acc = DialAccumulator(self._flush_brightness, max_steps=10)
+        self._brightness_acc = DialAccumulator(self._flush_brightness, delay=0.05, max_steps=10)
         self._datetime_sensor = ha.sensor("sensor.date_time")
         self._temp_sensor = ha.sensor("sensor.livingroom_temperature")
         self._humidity_sensor = ha.sensor("sensor.livingroom_humidity")

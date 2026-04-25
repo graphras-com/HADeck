@@ -1,6 +1,10 @@
 name: IconKey
 type: Key
 version: 1
+description: "Pushbutton with Iconify icon and a label below"
+author: Graphras.com
+license: Apache-2.0
+category: utilities
 layout: layout.svg
 
 bindings:
@@ -27,11 +31,21 @@ bindings:
     node: foreground
     attribute: color
     default: "#dedede"    
-    
+
+spinner:
+  type: rotation
+  node: spinner
+  frames: 8
+  interval_ms: 100
+
 events:
   - name: click
     source: key_press_release
     max_duration_ms: 300
+
+  - name: hold
+    source: key_hold
+    hold_ms: 350
 
   - name: press
     source: key_press

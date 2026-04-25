@@ -1,6 +1,10 @@
 name: PictureKey
 type: Key
 version: 1
+description: "Button with image"
+author: Graphras.com
+license: Apache-2.0
+category: utilities
 layout: layout.svg
 
 bindings:
@@ -8,7 +12,23 @@ bindings:
     type: image
     node: picture
 
+spinner:
+  type: rotation
+  node: spinner
+  frames: 8
+  interval_ms: 100
+
 events:
   - name: click
     source: key_press_release
     max_duration_ms: 300
+
+  - name: hold
+    source: key_hold
+    hold_ms: 350
+
+  - name: press
+    source: key_press
+
+  - name: release
+    source: key_release

@@ -66,14 +66,15 @@ async def setup_scenes(screen, iconkey_spec):
 FAVORITE_KEY_SLOTS = [0, 1, 4, 5]
 CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
 
-async def setup_favorites(screen, player, picturekey_spec):
-    """Populate favorite-media keys on the screen."""
+async def setup_favorites(screen, player, picturekey_spec) -> list[DuiKey]:
+    """Populate favorite-media keys on the screen. Returns the created keys."""
     favs = await player.favorites()
     favs = sorted(
         favs,
         key=lambda f: (CATEGORY_ORDER.get(f.category or "", 99), f.title or ""),
     )
 
+    keys: list[DuiKey] = []
     for idx, fav in enumerate(favs):
         if idx >= len(FAVORITE_KEY_SLOTS):
             break
@@ -84,11 +85,14 @@ async def setup_favorites(screen, player, picturekey_spec):
                 key.set("picture", thumb)
 
         @key.on_event("click")
-        async def _click(item=fav):
+        async def _click(item=fav, emitter=key):
             log.info("Play: %s", item.title)
+            await emitter.start_busy()
             await item.play()
 
         screen.set_key(FAVORITE_KEY_SLOTS[idx], key)
+        keys.append(key)
+    return keys
 # endregion
 
 # region Audio card
@@ -142,7 +146,16 @@ class AudioCardController:
         self._card = DuiCard(audiocard_spec)
         self._volume_acc = DialAccumulator(self._flush_volume, max_steps=10)
         self._skip_acc = DialAccumulator(self._flush_skip, max_steps=1)
+        self._on_state_callbacks: list = []
         self._bind_events()
+
+    def on_any_state(self, callback):
+        """Register a callback to be invoked on any player state change."""
+        self._on_state_callbacks.append(callback)
+
+    async def _fire_state_callbacks(self):
+        for cb in self._on_state_callbacks:
+            await cb()
 
     async def _flush_volume(self, steps: int):
         step = 0.01
@@ -208,6 +221,7 @@ class AudioCardController:
             vol = player.volume_level or 0.0
             self._card.set("volume", vol)
             self._card.set("value_text", f"{int(vol * 100)}%")
+            await self._fire_state_callbacks()
             await self._deck.refresh()
 
         @player.on_mute_change
@@ -217,21 +231,25 @@ class AudioCardController:
             else:
                 vol = player.volume_level or 0.0
                 self._card.set("value_text", f"{int(vol * 100)}%")
+            await self._fire_state_callbacks()
             await self._deck.refresh()
 
         @player.on_play
         async def _on_play(old, new):
             self._card.set("state", "Playing")
+            await self._fire_state_callbacks()
             await self._deck.refresh()
 
         @player.on_pause
         async def _on_pause(old, new):
             self._card.set("state", "Paused")
+            await self._fire_state_callbacks()
             await self._deck.refresh()
 
         @player.on_media_change
         async def _on_media(old, new):
             await self._update_now_playing(new)
+            await self._fire_state_callbacks()
             await self._deck.refresh()
         #endregion
 
@@ -528,11 +546,20 @@ async def run():
             # endregion
 
             # region Load state
+            favorite_keys: list[DuiKey] = []
+
+            async def _stop_favorites_busy():
+                for k in favorite_keys:
+                    await k.stop_busy()
+
+            audio_ctrl.on_any_state(_stop_favorites_busy)
+
             async def load_state():
                 """(Re)load all HA state and refresh the deck."""
+                nonlocal favorite_keys
                 log.info("Loading Home Assistant state…")
                 await ha.refresh_all()
-                await setup_favorites(screen, player, picturekey_spec)
+                favorite_keys = await setup_favorites(screen, player, picturekey_spec)
                 await setup_scenes(screen, iconkey_spec)
                 await audio_ctrl.sync_state()
                 await light_ctrl.sync_state()

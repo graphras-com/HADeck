@@ -41,20 +41,25 @@ async def _fetch_image(url: str) -> Image.Image | None:
     return None
 
 # region Scenes (keys)
-SCENES = {2:"Morning", 3:"Day", 6:"Evening", 7:"Cinema"}
+SCENES = [
+    { "position": 2, "label": "Normal", "icon": "fa-regular:smile-beam" },
+    { "position": 3, "label": "Tired", "icon": "fa-regular:tired" },
+    { "position": 6, "label": "Cinema", "icon": "mdi:cinema" },
+    { "position": 7, "label": "Bedtime", "icon": "icon-park-outline:sleep-two" }
+]
 
 async def setup_scenes(screen, iconkey_spec):
     """Populate scenes keys on the screen."""
-    for idx, scene in SCENES.items():
+    for scene in SCENES:
         key = DuiKey(iconkey_spec)
-        key.set("icon", "mdi:cinema")
-        key.set("label", scene)
+        key.set("icon", scene["icon"])
+        key.set("label", scene["label"])
 
         @key.on_event("click")
         async def _click(item=scene):
-            log.info("Activate: %s", item)
+            log.info("Activate: %s", item["label"])
 
-        screen.set_key(idx, key)
+        screen.set_key(scene["position"], key)
 # endregion
 
 # region Favorites (keys)

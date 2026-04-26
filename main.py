@@ -550,7 +550,7 @@ async def run():
 
             async def _stop_favorites_busy():
                 for k in favorite_keys:
-                    await k.stop_busy()
+                    await k.finish_busy()
 
             audio_ctrl.on_any_state(_stop_favorites_busy)
 

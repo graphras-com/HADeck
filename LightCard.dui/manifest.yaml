@@ -1,6 +1,10 @@
 name: LightCard
 type: TouchStripCard
 version: 1
+description: Lights controller with on/off switch, brightness and kelvin adjust
+author: Graphras.com
+license: Apache-2.0
+category: home-automation
 layout: layout.svg
 
 bindings:

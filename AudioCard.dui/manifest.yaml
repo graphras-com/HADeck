@@ -1,6 +1,10 @@
 name: AudioCard
 type: TouchStripCard
 version: 1
+description: Audio UI with play/pause, mute and volume control
+author: Graphras.com
+license: Apache-2.0
+category: media
 layout: layout.svg
 
 bindings:
@@ -52,6 +56,12 @@ bindings:
     node: volume_bar
     default: 0.5
     direction: horizontal
+
+spinner:
+  type: rotation
+  node: spinner
+  frames: 8
+  interval_ms: 100
 
 events:
   - name: toggle_play_pause

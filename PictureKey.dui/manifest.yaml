@@ -1,7 +1,7 @@
 name: PictureKey
 type: Key
 version: 1
-description: "Button with image"
+description: Button with image
 author: Graphras.com
 license: Apache-2.0
 category: utilities

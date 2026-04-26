@@ -1,6 +1,10 @@
 name: DashboardCard
 type: TouchStripCard
 version: 1
+description: Displays date and time, temperature and humidity and brightness control for the Deck
+author: Graphras.com
+license: Apache-2.0
+category: media
 layout: layout.svg
 
 bindings:

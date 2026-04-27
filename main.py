@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 from deckui import DeckManager, DeviceInfo, DuiCard, DuiKey, load_package
-from haclient import HAClient, NowPlaying
+from haclient import HAClient, NowPlaying, Timer
 
 import os
 
@@ -27,6 +27,7 @@ PACKAGES_DIR = Path(__file__).parent
 STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
 MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
 UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "light.upstairs")
+TIMER_ENTITY = os.environ.get("TIMER_ENTITY", "timer.timer")
 
 # region Helpers
 async def _fetch_image(url: str) -> Image.Image | None:
@@ -399,6 +400,140 @@ class LightCardController:
     # endregion
 # endregion
 
+# region Timer card
+class TimerCardController:
+    """Manages the TimerCard DUI widget and its HA timer bindings."""
+
+    DURATION_STEP = 30  # seconds per encoder tick
+
+    def __init__(self, ha: HAClient, deck, timer: Timer, timercard_spec):
+        self._ha = ha
+        self._deck = deck
+        self._timer = timer
+        self._card = DuiCard(timercard_spec)
+        self._duration_seconds: int = 300  # default 5 minutes
+        self._tick_task: asyncio.Task | None = None
+        self._bind_events()
+
+    @property
+    def card(self) -> DuiCard:
+        return self._card
+
+    @staticmethod
+    def _fmt(seconds: int) -> str:
+        """Format seconds as HH:MM:SS."""
+        h, rem = divmod(max(seconds, 0), 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    @staticmethod
+    def _duration_str(seconds: int) -> str:
+        """Format seconds as H:MM:SS duration for HA service calls."""
+        h, rem = divmod(max(seconds, 0), 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+
+    def _start_tick(self):
+        """Start a background task that updates the display every second."""
+        self._stop_tick()
+        self._tick_task = asyncio.create_task(self._tick_loop())
+
+    def _stop_tick(self):
+        if self._tick_task is not None:
+            self._tick_task.cancel()
+            self._tick_task = None
+
+    async def _tick_loop(self):
+        try:
+            while True:
+                remaining = self._timer.time_remaining
+                if remaining is not None:
+                    self._card.set("timer", self._fmt(int(remaining)))
+                    await self._deck.refresh()
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+
+    # region state sync
+    async def sync_state(self):
+        await self._timer.async_refresh()
+        self._update_card_from_state()
+        await self._deck.refresh()
+
+    def _update_card_from_state(self):
+        timer = self._timer
+        if timer.is_active:
+            remaining = timer.time_remaining
+            self._card.set("timer", self._fmt(int(remaining or 0)))
+            self._start_tick()
+        elif timer.is_paused:
+            remaining = timer.time_remaining
+            self._card.set("timer", self._fmt(int(remaining or 0)))
+            self._stop_tick()
+        else:
+            self._card.set("timer", self._fmt(self._duration_seconds))
+            self._stop_tick()
+    # endregion
+
+    # region HA event handlers
+    def _bind_events(self):
+        timer = self._timer
+
+        @timer.on_start
+        async def _on_start(old, new):
+            self._start_tick()
+            await self._deck.refresh()
+
+        @timer.on_pause
+        async def _on_pause(old, new):
+            self._stop_tick()
+            remaining = timer.time_remaining
+            if remaining is not None:
+                self._card.set("timer", self._fmt(int(remaining)))
+            await self._deck.refresh()
+
+        @timer.on_idle
+        async def _on_idle(old, new):
+            self._stop_tick()
+            self._card.set("timer", self._fmt(self._duration_seconds))
+            await self._deck.refresh()
+    # endregion
+
+    # region card UI event handlers
+    def bind_card_events(self):
+        timer = self._timer
+
+        @self._card.on("toggle")
+        async def _toggle():
+            if timer.is_active:
+                await timer.pause()
+            elif timer.is_paused:
+                await timer.start()
+            else:
+                duration = self._duration_str(self._duration_seconds)
+                await timer.start(duration=duration)
+
+        @self._card.on("reset")
+        async def _reset():
+            if timer.is_active or timer.is_paused:
+                await timer.cancel()
+
+        @self._card.on("increase_duration")
+        async def _increase():
+            if timer.is_idle:
+                self._duration_seconds = min(self._duration_seconds + self.DURATION_STEP, 86400)
+                self._card.set("timer", self._fmt(self._duration_seconds))
+                await self._deck.refresh()
+
+        @self._card.on("decrease_duration")
+        async def _decrease():
+            if timer.is_idle:
+                self._duration_seconds = max(self._duration_seconds - self.DURATION_STEP, self.DURATION_STEP)
+                self._card.set("timer", self._fmt(self._duration_seconds))
+                await self._deck.refresh()
+    # endregion
+# endregion
+
 # region Dashboard card
 class DashboardCardController:
     """Manages the DashboardCard DUI widget."""
@@ -512,6 +647,7 @@ async def run():
     iconkey_spec = load_package(PACKAGES_DIR / "IconKey.dui")
     lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
     dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
+    timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
     # endregion
 
     server = os.environ["HA_URL"]
@@ -522,6 +658,7 @@ async def run():
     async with HAClient(server, token=token) as ha:
         player = ha.media_player(MEDIA_PLAYER)
         upstairs = ha.light(UPSTAIRS_LIGHTS)
+        timer = ha.timer(TIMER_ENTITY)
 
         @manager.on_connect(serial=STREAMDECK_SERIAL)
         async def on_deck_connect(deck):
@@ -539,6 +676,10 @@ async def run():
             light_ctrl = LightCardController(ha, deck, upstairs, lightcard_spec)
             light_ctrl.bind_card_events()
             screen.set_card(1, light_ctrl.card)
+
+            timer_ctrl = TimerCardController(ha, deck, timer, timercard_spec)
+            timer_ctrl.bind_card_events()
+            screen.set_card(2, timer_ctrl.card)
 
             dash_ctrl = DashboardCardController(ha, deck, dashboardcard_spec)
             dash_ctrl.bind_card_events()
@@ -563,6 +704,7 @@ async def run():
                 await setup_scenes(screen, iconkey_spec)
                 await audio_ctrl.sync_state()
                 await light_ctrl.sync_state()
+                await timer_ctrl.sync_state()
                 await dash_ctrl.sync_state()
 
             await load_state()

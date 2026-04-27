@@ -25,7 +25,7 @@ events:
     direction: right
 
   - name: toggle
-    source: encoder_press
+    source: encoder_press_release
     max_duration_ms: 300
 
   - name: reset

@@ -29,7 +29,6 @@ MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
 UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "light.upstairs")
 TIMER_ENTITY = os.environ.get("TIMER_ENTITY", "timer.timer")
 
-# region Helpers
 async def _fetch_image(url: str) -> Image.Image | None:
     """Download an image over HTTP without blocking the event loop."""
     log.debug("_fetch_image: %s", url)
@@ -42,7 +41,6 @@ async def _fetch_image(url: str) -> Image.Image | None:
         log.exception("Failed to fetch image: %s", url)
     return None
 
-# region Scenes (keys)
 SCENES = [
     { "position": 2, "label": "Normal", "icon": "fa-regular:smile-beam" },
     { "position": 3, "label": "Tired", "icon": "fa-regular:tired" },
@@ -63,9 +61,7 @@ async def setup_scenes(screen, iconkey_spec):
             log.info("Activate: %s", item["label"])
 
         screen.set_key(scene["position"], key)
-# endregion
 
-# region Favorites (keys)
 FAVORITE_KEY_SLOTS = [0, 1, 4, 5]
 CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
 
@@ -97,52 +93,6 @@ async def setup_favorites(screen, player, picturekey_spec) -> list[DuiKey]:
         screen.set_key(FAVORITE_KEY_SLOTS[idx], key)
         keys.append(key)
     return keys
-# endregion
-
-# region Audio card
-class DialAccumulator:
-    """Debounce rapid dial/encoder ticks and flush them with a single callback.
-
-    *callback*   - ``async def callback(steps: int)`` called once per flush
-                   with the net accumulated tick count (signed).
-    *delay*      - seconds to wait after the last tick before flushing.
-    *max_steps*  - cap on how many ticks can accumulate (positive number).
-                   Use ``max_steps=1`` to collapse any number of ticks into
-                   a single +1 / -1 event (useful for next/previous).
-    """
-
-    def __init__(self, callback, *, delay: float = 0.25, max_steps: int = 10):
-        log.debug("DialAccumulator.__init__: delay=%.2f max_steps=%d", delay, max_steps)
-        self._callback = callback
-        self._delay = delay
-        self._max_steps = max_steps
-        self._pending: int = 0
-        self._flush_task: asyncio.Task | None = None
-
-    def tick(self, direction: int):
-        """Add +1 or -1. Clamps to ±max_steps."""
-        log.debug("DialAccumulator.tick: direction=%+d pending=%d", direction, self._pending)
-        self._pending = max(-self._max_steps, min(self._max_steps, self._pending + direction))
-        if self._flush_task is not None:
-            self._flush_task.cancel()
-        self._flush_task = asyncio.create_task(self._schedule_flush())
-
-    async def _schedule_flush(self):
-        try:
-            log.debug("DialAccumulator._schedule_flush: waiting %.2fs", self._delay)
-            await asyncio.sleep(self._delay)
-            await self._flush()
-        except asyncio.CancelledError:
-            pass
-
-    async def _flush(self):
-        steps = self._pending
-        self._pending = 0
-        log.debug("DialAccumulator._flush: steps=%+d", steps)
-        if steps == 0:
-            return
-        await self._callback(steps)
-
 
 class AudioCardController:
     """Manages the AudioCard DUI widget and its HA media-player bindings."""
@@ -153,8 +103,6 @@ class AudioCardController:
         self._deck = deck
         self._player = player
         self._card = DuiCard(audiocard_spec)
-        self._volume_acc = DialAccumulator(self._flush_volume, max_steps=10)
-        self._skip_acc = DialAccumulator(self._flush_skip, max_steps=1)
         self._on_state_callbacks: list = []
         self._bind_events()
 
@@ -168,41 +116,20 @@ class AudioCardController:
         for cb in self._on_state_callbacks:
             await cb()
 
-    async def _flush_volume(self, steps: int):
-        log.debug("AudioCardController._flush_volume: steps=%+d", steps)
-        step = 0.01
-        current = self._player.volume_level or 0.0
-        target = max(0.0, min(1.0, current + steps * step))
-        log.info("Volume flush: %+d steps → %.0f%%", steps, target * 100)
-        await self._player.set_volume(target)
-
-    async def _flush_skip(self, direction: int):
-        log.debug("AudioCardController._flush_skip: direction=%+d", direction)
-        if direction > 0:
-            log.info("Skip flush: next")
-            await self._player.next()
-        else:
-            log.info("Skip flush: previous")
-            await self._player.previous()
-
     @property
     def card(self) -> DuiCard:
         return self._card
 
-    # region initial / reconnect state sync
     async def sync_state(self):
         """Read current player state and push it to the card."""
         log.debug("AudioCardController.sync_state")
         player = self._player
         await player.async_refresh()
 
-        # Now-playing artwork + metadata
         await self._update_now_playing(player.now_playing)
 
-        # Play / pause label
         self._card.set("state", "Playing" if player.is_playing else "Paused")
 
-        # Volume
         volume = player.volume_level or 0.0
         self._card.set("volume", volume)
         if player.is_muted:
@@ -211,9 +138,7 @@ class AudioCardController:
             self._card.set("value_text", f"{int(volume * 100)}%")
 
         await self._deck.refresh()
-    # endregion
 
-    # region internal helpers
     async def _update_now_playing(self, media: NowPlaying):
         log.debug("AudioCardController._update_now_playing: %s - %s", media.artist, media.title)
         picture = None
@@ -225,9 +150,7 @@ class AudioCardController:
             album=media.album,
             cover=picture,
         )
-    # endregion
 
-    # region HA event handlers
     def _bind_events(self):
         player = self._player
         log.debug("AudioCardController._bind_events")
@@ -272,10 +195,8 @@ class AudioCardController:
             await self._update_now_playing(new)
             await self._fire_state_callbacks()
             await self._deck.refresh()
-        #endregion
 
-    # region card UI event handlers
-    def bind_card_events(self):
+    def bind_card_events(self, encoder):
         player = self._player
         log.debug("AudioCardController.bind_card_events")
 
@@ -284,36 +205,28 @@ class AudioCardController:
             log.debug("AudioCardController: toggle_play_pause")
             await player.play_pause()
 
-        @self._card.on("volume_up")
-        async def _up():
-            log.debug("AudioCardController: volume_up")
-            self._volume_acc.tick(+1)
-
-        @self._card.on("volume_down")
-        async def _down():
-            log.debug("AudioCardController: volume_down")
-            self._volume_acc.tick(-1)
+        @encoder.on_turn_accumulated
+        async def _volume(steps: int):
+            step = 0.01
+            current = player.volume_level or 0.0
+            target = max(0.0, min(1.0, current + steps * step))
+            log.info("Volume: %+d steps → %.0f%%", steps, target * 100)
+            await player.set_volume(target)
 
         @self._card.on("mute_toggle")
         async def _mute():
             log.debug("AudioCardController: mute_toggle")
             await player.mute(not player.is_muted)
 
-        @self._card.on("next")
-        async def _next():
-            log.debug("AudioCardController: next")
-            if player.now_playing.next:
-                self._skip_acc.tick(+1)
+        @encoder.on_press_turn_accumulated(max_steps=1)
+        async def _skip(steps: int):
+            if steps > 0:
+                log.info("Skip: next")
+                await player.next()
+            else:
+                log.info("Skip: previous")
+                await player.previous()
 
-        @self._card.on("previous")
-        async def _prev():
-            log.debug("AudioCardController: previous")
-            if player.now_playing.previous:
-                self._skip_acc.tick(-1)
-        # endregion
-# endregion
-
-# region Light card
 class LightCardController:
     """Manages the LightCard DUI widget and its HA light bindings."""
 
@@ -323,36 +236,12 @@ class LightCardController:
         self._deck = deck
         self._light = light
         self._card = DuiCard(lightcard_spec)
-        self._brightness_acc = DialAccumulator(self._flush_brightness, max_steps=10)
-        self._kelvin_acc = DialAccumulator(self._flush_kelvin, max_steps=1)
         self._bind_events()
 
     @property
     def card(self) -> DuiCard:
         return self._card
 
-    # region flush helpers
-    async def _flush_brightness(self, steps: int):
-        log.debug("LightCardController._flush_brightness: steps=%+d", steps)
-        step = 0.05
-        current = (self._light.brightness or 0) / 255.0
-        target = max(0.0, min(1.0, current + steps * step))
-        brightness = int(target * 255)
-        log.info("Brightness flush: %+d steps → %d%%", steps, int(target * 100))
-        await self._light.set_brightness(brightness)
-
-    async def _flush_kelvin(self, steps: int):
-        log.debug("LightCardController._flush_kelvin: steps=%+d", steps)
-        step = 250
-        current = self._light.kelvin or self._light.min_kelvin
-        min_k = self._light.min_kelvin
-        max_k = self._light.max_kelvin
-        target = max(min_k, min(max_k, current + steps * step))
-        log.info("Kelvin flush: %+d steps → %dK", steps, target)
-        await self._light.set_kelvin(int(target))
-    # endregion
-
-    # region state sync
     async def sync_state(self):
         log.debug("LightCardController.sync_state")
         await self._light.async_refresh()
@@ -376,9 +265,7 @@ class LightCardController:
         kelvin_pct = (kelvin - min_k) / kelvin_range if kelvin_range > 0 else 0.0
         self._card.set("kelvin", kelvin_pct)
         self._card.set("kelvin_value_text", f"{int(kelvin)}K")
-    # endregion
 
-    # region HA event handlers
     def _bind_events(self):
         light = self._light
         log.debug("LightCardController._bind_events")
@@ -412,10 +299,8 @@ class LightCardController:
             log.debug("LightCardController._on_kelvin: %s → %s", old, new)
             self._update_card_from_state()
             await self._deck.refresh()
-    # endregion
 
-    # region card UI event handlers
-    def bind_card_events(self):
+    def bind_card_events(self, encoder):
         log.debug("LightCardController.bind_card_events")
 
         @self._card.on("toggle")
@@ -423,29 +308,27 @@ class LightCardController:
             log.debug("LightCardController: toggle")
             await self._light.toggle()
 
-        @self._card.on("brightness_up")
-        async def _brightness_up():
-            log.debug("LightCardController: brightness_up")
-            self._brightness_acc.tick(+1)
+        @encoder.on_turn_accumulated
+        async def _brightness(steps: int):
+            step = 0.05
+            current = (self._light.brightness or 0) / 255.0
+            target = max(0.0, min(1.0, current + steps * step))
+            brightness = int(target * 255)
+            log.info("Brightness: %+d steps → %d%%", steps, int(target * 100))
+            await self._light.set_brightness(brightness)
 
-        @self._card.on("brightness_down")
-        async def _brightness_down():
-            log.debug("LightCardController: brightness_down")
-            self._brightness_acc.tick(-1)
-
-        @self._card.on("kelvin_up")
-        async def _kelvin_up():
-            log.debug("LightCardController: kelvin_up")
-            self._kelvin_acc.tick(+1)
-
-        @self._card.on("kelvin_down")
-        async def _kelvin_down():
-            log.debug("LightCardController: kelvin_down")
-            self._kelvin_acc.tick(-1)
+        @encoder.on_press_turn_accumulated(max_steps=1)
+        async def _kelvin(steps: int):
+            step = 250
+            current = self._light.kelvin or self._light.min_kelvin
+            min_k = self._light.min_kelvin
+            max_k = self._light.max_kelvin
+            target = max(min_k, min(max_k, current + steps * step))
+            log.info("Kelvin: %+d steps → %dK", steps, target)
+            await self._light.set_kelvin(int(target))
     # endregion
-# endregion
 
-# region Timer card
+
 class TimerCardController:
     """Manages the TimerCard DUI widget and its HA timer bindings."""
 
@@ -554,7 +437,7 @@ class TimerCardController:
     # endregion
 
     # region card UI event handlers
-    def bind_card_events(self):
+    def bind_card_events(self, encoder):
         timer = self._timer
         log.debug("TimerCardController.bind_card_events")
 
@@ -575,25 +458,19 @@ class TimerCardController:
             if timer.is_active or timer.is_paused:
                 await timer.cancel()
 
-        @self._card.on("increase_duration")
-        async def _increase():
-            log.debug("TimerCardController: increase_duration")
+        @encoder.on_turn_accumulated
+        async def _adjust_duration(steps: int):
+            log.debug("TimerCardController: adjust_duration steps=%+d", steps)
             if timer.is_idle:
-                self._duration_seconds = min(self._duration_seconds + self.DURATION_STEP, 86400)
-                self._card.set("timer", self._fmt(self._duration_seconds))
-                await self._deck.refresh()
-
-        @self._card.on("decrease_duration")
-        async def _decrease():
-            log.debug("TimerCardController: decrease_duration")
-            if timer.is_idle:
-                self._duration_seconds = max(self._duration_seconds - self.DURATION_STEP, self.DURATION_STEP)
+                self._duration_seconds = max(
+                    self.DURATION_STEP,
+                    min(86400, self._duration_seconds + steps * self.DURATION_STEP),
+                )
                 self._card.set("timer", self._fmt(self._duration_seconds))
                 await self._deck.refresh()
     # endregion
-# endregion
 
-# region Dashboard card
+
 class DashboardCardController:
     """Manages the DashboardCard DUI widget."""
 
@@ -602,7 +479,6 @@ class DashboardCardController:
         self._ha = ha
         self._deck = deck
         self._card = DuiCard(dashboardcard_spec)
-        self._brightness_acc = DialAccumulator(self._flush_brightness, delay=0.05, max_steps=10)
         self._datetime_sensor = ha.sensor("sensor.date_time")
         self._temp_sensor = ha.sensor("sensor.livingroom_temperature")
         self._humidity_sensor = ha.sensor("sensor.livingroom_humidity")
@@ -611,17 +487,6 @@ class DashboardCardController:
     @property
     def card(self) -> DuiCard:
         return self._card
-
-    async def _flush_brightness(self, steps: int):
-        log.debug("DashboardCardController._flush_brightness: steps=%+d", steps)
-        step = 0.05
-        current = self._deck.brightness / 100.0
-        target = max(0.0, min(1.0, current + steps * step))
-        brightness = int(target * 100)
-        log.info("Deck brightness flush: %+d steps → %d%%", steps, brightness)
-        await self._deck.set_brightness(brightness)
-        self._card.set("deck_brightness", target)
-        await self._deck.refresh()
 
     def _format_datetime(self, value: str):
         """Parse 'YYYY-MM-DD, HH:MM' from sensor.date_time and update card."""
@@ -655,18 +520,19 @@ class DashboardCardController:
             self._card.set("humidity", f"{new}%")
             await self._deck.refresh()
 
-    def bind_card_events(self):
+    def bind_card_events(self, encoder):
         log.debug("DashboardCardController.bind_card_events")
 
-        @self._card.on("brightness_up")
-        async def _up():
-            log.debug("DashboardCardController: brightness_up")
-            self._brightness_acc.tick(+1)
-
-        @self._card.on("brightness_down")
-        async def _down():
-            log.debug("DashboardCardController: brightness_down")
-            self._brightness_acc.tick(-1)
+        @encoder.on_turn_accumulated(delay=0.05)
+        async def _brightness(steps: int):
+            step = 0.05
+            current = self._deck.brightness / 100.0
+            target = max(0.0, min(1.0, current + steps * step))
+            brightness = int(target * 100)
+            log.info("Deck brightness: %+d steps → %d%%", steps, brightness)
+            await self._deck.set_brightness(brightness)
+            self._card.set("deck_brightness", target)
+            await self._deck.refresh()
 
     async def sync_state(self):
         log.debug("DashboardCardController.sync_state")
@@ -679,9 +545,8 @@ class DashboardCardController:
         self._card.set("humidity", f"{self._humidity_sensor.state}%")
         self._card.set("deck_brightness", self._deck.brightness / 100.0)
         await self._deck.refresh()
-# endregion
 
-# region Reconnection watcher
+
 async def watch_reconnect(ha: HAClient, on_reconnected):
     """Wait for WS disconnect, then wait for reconnect, and call callback.
 
@@ -707,19 +572,17 @@ async def watch_reconnect(ha: HAClient, on_reconnected):
 
     # Keep this coroutine alive for the lifetime of the app
     await asyncio.Event().wait()
-# endregion
 
-# region Application
+
 async def run():
     log.debug("run: starting")
-    # region Load DUI packages
+    
     audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
     picturekey_spec = load_package(PACKAGES_DIR / "PictureKey.dui")
     iconkey_spec = load_package(PACKAGES_DIR / "IconKey.dui")
     lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
     dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
     timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
-    # endregion
 
     server = os.environ["HA_URL"]
     token = os.environ["HA_TOKEN"]
@@ -739,25 +602,22 @@ async def run():
             if screen.touch_strip is not None:
                 screen.touch_strip.background_color = "#1c1c1c"
 
-            # region Build UI widgets
             audio_ctrl = AudioCardController(ha, deck, player, audiocard_spec)
-            audio_ctrl.bind_card_events()
+            audio_ctrl.bind_card_events(screen.encoder(0))
             screen.set_card(0, audio_ctrl.card)
 
             light_ctrl = LightCardController(ha, deck, upstairs, lightcard_spec)
-            light_ctrl.bind_card_events()
+            light_ctrl.bind_card_events(screen.encoder(1))
             screen.set_card(1, light_ctrl.card)
 
             timer_ctrl = TimerCardController(ha, deck, timer, timercard_spec)
-            timer_ctrl.bind_card_events()
+            timer_ctrl.bind_card_events(screen.encoder(2))
             screen.set_card(2, timer_ctrl.card)
 
             dash_ctrl = DashboardCardController(ha, deck, dashboardcard_spec)
-            dash_ctrl.bind_card_events()
+            dash_ctrl.bind_card_events(screen.encoder(3))
             screen.set_card(3, dash_ctrl.card)
-            # endregion
 
-            # region Load state
             favorite_keys: list[DuiKey] = []
 
             async def _stop_favorites_busy():
@@ -779,16 +639,11 @@ async def run():
                 await dash_ctrl.sync_state()
 
             await load_state()
-            # endregion
 
-            # region HA reconnect watcher
             asyncio.create_task(watch_reconnect(ha, load_state))
-            # endregion
 
-            # region Activate screen
             await deck.set_screen("main")
             log.info("Deck ready!")
-            # endregion
 
         @manager.on_disconnect
         async def on_deck_disconnect(info: DeviceInfo):
@@ -797,14 +652,11 @@ async def run():
         log.info("Waiting for StreamDeck %s…", STREAMDECK_SERIAL)
         async with manager:
             await manager.wait_closed()
-# endregion
 
-# region main
+
 def main():
     log.debug("main: entry")
     asyncio.run(run())
 
-
 if __name__ == "__main__":
     main()
-# endregion

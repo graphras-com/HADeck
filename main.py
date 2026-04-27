@@ -310,7 +310,7 @@ class LightCardController:
         target = max(0.0, min(1.0, current + steps * step))
         brightness = int(target * 255)
         log.info("Brightness flush: %+d steps → %d%%", steps, int(target * 100))
-        await self._light.turn_on(brightness=brightness)
+        await self._light.set_brightness(brightness)
 
     async def _flush_kelvin(self, steps: int):
         step = 250
@@ -319,7 +319,7 @@ class LightCardController:
         max_k = self._light.max_kelvin
         target = max(min_k, min(max_k, current + steps * step))
         log.info("Kelvin flush: %+d steps → %dK", steps, target)
-        await self._light.turn_on(kelvin=int(target))
+        await self._light.set_kelvin(int(target))
     # endregion
 
     # region state sync
@@ -573,22 +573,19 @@ class DashboardCardController:
             log.warning("Could not parse date_time: %s", value)
 
     def _bind_events(self):
-        @self._datetime_sensor.on_state_change
+        @self._datetime_sensor.on_value_change
         async def _on_datetime(old, new):
-            state = new["state"] if isinstance(new, dict) else new
-            self._format_datetime(state)
+            self._format_datetime(new)
             await self._deck.refresh()
 
-        @self._temp_sensor.on_state_change
+        @self._temp_sensor.on_value_change
         async def _on_temp(old, new):
-            state = new["state"] if isinstance(new, dict) else new
-            self._card.set("temperature", f"{state}°")
+            self._card.set("temperature", f"{new}°")
             await self._deck.refresh()
 
-        @self._humidity_sensor.on_state_change
+        @self._humidity_sensor.on_value_change
         async def _on_humidity(old, new):
-            state = new["state"] if isinstance(new, dict) else new
-            self._card.set("humidity", f"{state}%")
+            self._card.set("humidity", f"{new}%")
             await self._deck.refresh()
 
     def bind_card_events(self):

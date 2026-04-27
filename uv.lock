@@ -498,7 +498,7 @@ wheels = [
 [[package]]
 name = "haclient"
 version = "0.1.0"
-source = { git = "https://github.com/graphras-com/HaClient.git#674c650288fc2c683b067863183bcc329f6316bc" }
+source = { git = "https://github.com/graphras-com/HaClient.git#077ca29b9047b5d3907806787228107940dbe5fb" }
 dependencies = [
     { name = "aiohttp" },
 ]

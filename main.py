@@ -97,11 +97,12 @@ async def setup_favorites(screen, player, picturekey_spec) -> list[DuiKey]:
 class AudioCardController:
     """Manages the AudioCard DUI widget and its HA media-player bindings."""
 
-    def __init__(self, ha: HAClient, deck, player, audiocard_spec):
+    def __init__(self, ha: HAClient, deck, player):
         log.debug("AudioCardController.__init__")
         self._ha = ha
         self._deck = deck
         self._player = player
+        audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
         self._card = DuiCard(audiocard_spec)
         self._on_state_callbacks: list = []
         self._bind_events()
@@ -230,11 +231,12 @@ class AudioCardController:
 class LightCardController:
     """Manages the LightCard DUI widget and its HA light bindings."""
 
-    def __init__(self, ha: HAClient, deck, light, lightcard_spec):
+    def __init__(self, ha: HAClient, deck, light):
         log.debug("LightCardController.__init__")
         self._ha = ha
         self._deck = deck
         self._light = light
+        lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
         self._card = DuiCard(lightcard_spec)
         self._bind_events()
 
@@ -328,17 +330,17 @@ class LightCardController:
             await self._light.set_kelvin(int(target))
     # endregion
 
-
 class TimerCardController:
     """Manages the TimerCard DUI widget and its HA timer bindings."""
 
     DURATION_STEP = 30  # seconds per encoder tick
 
-    def __init__(self, ha: HAClient, deck, timer: Timer, timercard_spec):
+    def __init__(self, ha: HAClient, deck, timer: Timer):
         log.debug("TimerCardController.__init__")
         self._ha = ha
         self._deck = deck
         self._timer = timer
+        timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
         self._card = DuiCard(timercard_spec)
         self._duration_seconds: int = 300  # default 5 minutes
         self._tick_task: asyncio.Task | None = None
@@ -470,14 +472,14 @@ class TimerCardController:
                 await self._deck.refresh()
     # endregion
 
-
 class DashboardCardController:
     """Manages the DashboardCard DUI widget."""
 
-    def __init__(self, ha: HAClient, deck, dashboardcard_spec):
+    def __init__(self, ha: HAClient, deck):
         log.debug("DashboardCardController.__init__")
         self._ha = ha
         self._deck = deck
+        dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
         self._card = DuiCard(dashboardcard_spec)
         self._datetime_sensor = ha.sensor("sensor.date_time")
         self._temp_sensor = ha.sensor("sensor.livingroom_temperature")
@@ -546,7 +548,6 @@ class DashboardCardController:
         self._card.set("deck_brightness", self._deck.brightness / 100.0)
         await self._deck.refresh()
 
-
 async def watch_reconnect(ha: HAClient, on_reconnected):
     """Wait for WS disconnect, then wait for reconnect, and call callback.
 
@@ -573,16 +574,15 @@ async def watch_reconnect(ha: HAClient, on_reconnected):
     # Keep this coroutine alive for the lifetime of the app
     await asyncio.Event().wait()
 
-
 async def run():
     log.debug("run: starting")
     
-    audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
+    #audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
     picturekey_spec = load_package(PACKAGES_DIR / "PictureKey.dui")
     iconkey_spec = load_package(PACKAGES_DIR / "IconKey.dui")
-    lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
-    dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
-    timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
+    #lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
+    #dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
+    #timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
 
     server = os.environ["HA_URL"]
     token = os.environ["HA_TOKEN"]
@@ -602,19 +602,19 @@ async def run():
             if screen.touch_strip is not None:
                 screen.touch_strip.background_color = "#1c1c1c"
 
-            audio_ctrl = AudioCardController(ha, deck, player, audiocard_spec)
+            audio_ctrl = AudioCardController(ha, deck, player)
             audio_ctrl.bind_card_events(screen.encoder(0))
             screen.set_card(0, audio_ctrl.card)
 
-            light_ctrl = LightCardController(ha, deck, upstairs, lightcard_spec)
+            light_ctrl = LightCardController(ha, deck, upstairs)
             light_ctrl.bind_card_events(screen.encoder(1))
             screen.set_card(1, light_ctrl.card)
 
-            timer_ctrl = TimerCardController(ha, deck, timer, timercard_spec)
+            timer_ctrl = TimerCardController(ha, deck, timer)
             timer_ctrl.bind_card_events(screen.encoder(2))
             screen.set_card(2, timer_ctrl.card)
 
-            dash_ctrl = DashboardCardController(ha, deck, dashboardcard_spec)
+            dash_ctrl = DashboardCardController(ha, deck)
             dash_ctrl.bind_card_events(screen.encoder(3))
             screen.set_card(3, dash_ctrl.card)
 
@@ -652,7 +652,6 @@ async def run():
         log.info("Waiting for StreamDeck %s…", STREAMDECK_SERIAL)
         async with manager:
             await manager.wait_closed()
-
 
 def main():
     log.debug("main: entry")

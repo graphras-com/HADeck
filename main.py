@@ -26,8 +26,8 @@ log = logging.getLogger(__name__)
 PACKAGES_DIR = Path(__file__).parent
 STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
 MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
-UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "light.upstairs")
-TIMER_ENTITY = os.environ.get("TIMER_ENTITY", "timer.timer")
+UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "upstairs")
+TIMER_ENTITY = os.environ.get("TIMER_ENTITY", "streamdeck")
 
 async def _fetch_image(url: str) -> Image.Image | None:
     """Download an image over HTTP without blocking the event loop."""
@@ -144,7 +144,7 @@ class AudioCardController:
         log.debug("AudioCardController._update_now_playing: %s - %s", media.artist, media.title)
         picture = None
         if media.entity_picture is not None:
-            picture = await _fetch_image(self._ha.base_url + media.entity_picture)
+            picture = await _fetch_image(media.entity_picture)
         self._card.set_many(
             artist=media.artist,
             title=media.title,
@@ -344,7 +344,7 @@ class LightCardController:
             new_val = self._card.adjust_range("kelvin", -abs(steps) * step, min_val=min_k, max_val=max_k)
             log.info("Kelvin: -%d steps → %dK", abs(steps), int(new_val))
             await self._light.set_kelvin(int(new_val))
-    # endregion
+    
 
 class TimerCardController:
     """Manages the TimerCard DUI widget and its HA timer bindings."""
@@ -463,7 +463,9 @@ class TimerCardController:
                 await timer.start()
             else:
                 duration = self._duration_str(self._duration_seconds)
-                await timer.start(duration=duration)
+                log.debug("TimerCardController: start (duration_str=%s duration=%d)", duration, self._duration_seconds)
+                #await timer.start(duration=duration)
+                await timer.start(duration="00:00:10")
 
         @self._card.on("reset")
         async def _reset():
@@ -474,7 +476,7 @@ class TimerCardController:
         @self._card.on("increase_duration")
         async def _increase_duration(steps: int):
             log.debug("TimerCardController: increase_duration steps=+%d", steps)
-            if timer.is_idle:
+            if not timer.is_active:
                 self._duration_seconds = max(
                     self.DURATION_STEP,
                     min(86400, self._duration_seconds + steps * self.DURATION_STEP),
@@ -485,14 +487,13 @@ class TimerCardController:
         @self._card.on("decrease_duration")
         async def _decrease_duration(steps: int):
             log.debug("TimerCardController: decrease_duration steps=-%d", abs(steps))
-            if timer.is_idle:
+            if not timer.is_active:
                 self._duration_seconds = max(
                     self.DURATION_STEP,
                     min(86400, self._duration_seconds - abs(steps) * self.DURATION_STEP),
                 )
                 self._card.set("timer", self._fmt(self._duration_seconds))
                 await self._deck.refresh()
-    # endregion
 
 class DashboardCardController:
     """Manages the DashboardCard DUI widget."""
@@ -503,9 +504,9 @@ class DashboardCardController:
         self._deck = deck
         dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
         self._card = DuiCard(dashboardcard_spec)
-        self._datetime_sensor = ha.sensor("sensor.date_time")
-        self._temp_sensor = ha.sensor("sensor.livingroom_temperature")
-        self._humidity_sensor = ha.sensor("sensor.livingroom_humidity")
+        self._datetime_sensor = ha.sensor("date_time")
+        self._temp_sensor = ha.sensor("livingroom_temperature")
+        self._humidity_sensor = ha.sensor("livingroom_humidity")
         self._bind_events()
 
     @property
@@ -573,31 +574,6 @@ class DashboardCardController:
         self._card.set_range("deck_brightness", self._deck.brightness, min_val=0, max_val=100)
         await self._deck.refresh()
 
-async def watch_reconnect(ha: HAClient, on_reconnected):
-    """Wait for WS disconnect, then wait for reconnect, and call callback.
-
-    The HAClient WS layer reconnects automatically and re-subscribes events,
-    but entity *state* is stale until we explicitly refresh.
-    """
-    log.debug("watch_reconnect: starting")
-    reconnected = asyncio.Event()
-
-    @ha.ws.on_disconnect
-    def _on_drop():
-        log.warning("Home Assistant WebSocket disconnected")
-        reconnected.clear()
-        # Start polling for reconnection in a task
-        asyncio.create_task(_wait_for_reconnect())
-
-    async def _wait_for_reconnect():
-        log.debug("watch_reconnect._wait_for_reconnect: polling")
-        while not ha.ws.connected:
-            await asyncio.sleep(1)
-        log.info("Home Assistant WebSocket reconnected")
-        await on_reconnected()
-
-    # Keep this coroutine alive for the lifetime of the app
-    await asyncio.Event().wait()
 
 async def run():
     log.debug("run: starting")
@@ -617,7 +593,8 @@ async def run():
     async with HAClient(server, token=token) as ha:
         player = ha.media_player(MEDIA_PLAYER)
         upstairs = ha.light(UPSTAIRS_LIGHTS)
-        timer = ha.timer(TIMER_ENTITY)
+        #timer = ha.timer(TIMER_ENTITY)
+        timer = ha.timer()
 
         @manager.on_connect(serial=STREAMDECK_SERIAL)
         async def on_deck_connect(deck):
@@ -663,9 +640,20 @@ async def run():
                 await timer_ctrl.sync_state()
                 await dash_ctrl.sync_state()
 
+            async def sync_deck():
+                """Re-sync deck UI after HAClient reconnects (state already refreshed)."""
+                nonlocal favorite_keys
+                log.info("Re-syncing deck after reconnect…")
+                favorite_keys = await setup_favorites(screen, player, picturekey_spec)
+                await setup_scenes(screen, iconkey_spec)
+                await audio_ctrl.sync_state()
+                await light_ctrl.sync_state()
+                await timer_ctrl.sync_state()
+                await dash_ctrl.sync_state()
+
             await load_state()
 
-            asyncio.create_task(watch_reconnect(ha, load_state))
+            ha.on_reconnect(sync_deck)
 
             await deck.set_screen("main")
             log.info("Deck ready!")

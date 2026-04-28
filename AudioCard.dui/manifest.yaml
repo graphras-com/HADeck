@@ -12,21 +12,21 @@ bindings:
     type: text
     node: artist
     default: ""
-    max_width: 190
+    max_width: 185
     overflow: ellipsis
 
   title:
     type: text
     node: title
     default: ""
-    max_width: 190
+    max_width: 185
     overflow: ellipsis
 
   album:
     type: text
     node: album
     default: ""
-    max_width: 190
+    max_width: 185
     overflow: ellipsis
 
   state:

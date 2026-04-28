@@ -218,8 +218,8 @@ class AudioCardController:
         async def _volume_down(steps: int):
             step = 0.01
             current = player.volume_level or 0.0
-            target = max(0.0, min(1.0, current - steps * step))
-            log.info("Volume: -%d steps → %.0f%%", steps, target * 100)
+            target = max(0.0, min(1.0, current - abs(steps) * step))
+            log.info("Volume: -%d steps → %.0f%%", abs(steps), target * 100)
             await player.set_volume(target)
 
         @self._card.on("mute_toggle")
@@ -332,9 +332,9 @@ class LightCardController:
         async def _brightness_down(steps: int):
             step = 0.05
             current = (self._light.brightness or 0) / 255.0
-            target = max(0.0, min(1.0, current - steps * step))
+            target = max(0.0, min(1.0, current - abs(steps) * step))
             brightness = int(target * 255)
-            log.info("Brightness: -%d steps → %d%%", steps, int(target * 100))
+            log.info("Brightness: -%d steps → %d%%", abs(steps), int(target * 100))
             await self._light.set_brightness(brightness)
 
         @self._card.on("kelvin_up")
@@ -353,8 +353,8 @@ class LightCardController:
             current = self._light.kelvin or self._light.min_kelvin
             min_k = self._light.min_kelvin
             max_k = self._light.max_kelvin
-            target = max(min_k, min(max_k, current - steps * step))
-            log.info("Kelvin: -%d steps → %dK", steps, target)
+            target = max(min_k, min(max_k, current - abs(steps) * step))
+            log.info("Kelvin: -%d steps → %dK", abs(steps), target)
             await self._light.set_kelvin(int(target))
     # endregion
 
@@ -496,11 +496,11 @@ class TimerCardController:
 
         @self._card.on("decrease_duration")
         async def _decrease_duration(steps: int):
-            log.debug("TimerCardController: decrease_duration steps=-%d", steps)
+            log.debug("TimerCardController: decrease_duration steps=-%d", abs(steps))
             if timer.is_idle:
                 self._duration_seconds = max(
                     self.DURATION_STEP,
-                    min(86400, self._duration_seconds - steps * self.DURATION_STEP),
+                    min(86400, self._duration_seconds - abs(steps) * self.DURATION_STEP),
                 )
                 self._card.set("timer", self._fmt(self._duration_seconds))
                 await self._deck.refresh()
@@ -574,9 +574,9 @@ class DashboardCardController:
         async def _brightness_down(steps: int):
             step = 0.05
             current = self._deck.brightness / 100.0
-            target = max(0.0, min(1.0, current - steps * step))
+            target = max(0.0, min(1.0, current - abs(steps) * step))
             brightness = int(target * 100)
-            log.info("Deck brightness: -%d steps → %d%%", steps, brightness)
+            log.info("Deck brightness: -%d steps → %d%%", abs(steps), brightness)
             await self._deck.set_brightness(brightness)
             self._card.set("deck_brightness", target)
             await self._deck.refresh()

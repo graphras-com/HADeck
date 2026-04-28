@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import logging
-from io import BytesIO
 from pathlib import Path
 
-import aiohttp
-from PIL import Image
-
 from deckui import DuiKey
+from deckui.render.image_fetch import ImageFetchError, fetch_image
 
 log = logging.getLogger(__name__)
 
@@ -22,19 +19,6 @@ SCENES = [
 
 FAVORITE_KEY_SLOTS = [0, 1, 4, 5]
 CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
-
-
-async def fetch_image(url: str) -> Image.Image | None:
-    """Download an image over HTTP without blocking the event loop."""
-    log.debug("fetch_image: %s", url)
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    return Image.open(BytesIO(await resp.read()))
-    except Exception:
-        log.exception("Failed to fetch image: %s", url)
-    return None
 
 
 async def setup_scenes(screen, iconkey_spec):
@@ -67,9 +51,10 @@ async def setup_favorites(screen, player, picturekey_spec) -> list[DuiKey]:
             break
         key = DuiKey(picturekey_spec)
         if fav.thumbnail is not None:
-            thumb = await fetch_image(fav.thumbnail)
-            if thumb is not None:
-                key.set("picture", thumb)
+            try:
+                key.set("picture", fetch_image(fav.thumbnail))
+            except ImageFetchError:
+                log.warning("Could not load thumbnail for %s", fav.title)
 
         @key.on_event("click")
         async def _click(item=fav, emitter=key):

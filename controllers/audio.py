@@ -6,7 +6,9 @@ from pathlib import Path
 from deckui import DuiCard, load_package
 from haclient import HAClient, NowPlaying
 
-from helpers import PACKAGES_DIR, fetch_image
+from deckui.render.image_fetch import ImageFetchError, fetch_image
+
+from helpers import PACKAGES_DIR
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +63,10 @@ class AudioCardController:
         log.debug("AudioCardController._update_now_playing: %s - %s", media.artist, media.title)
         picture = None
         if media.entity_picture is not None:
-            picture = await fetch_image(media.entity_picture)
+            try:
+                picture = fetch_image(media.entity_picture)
+            except ImageFetchError:
+                log.warning("Could not load cover for %s", media.title)
         self._card.set_many(
             artist=media.artist,
             title=media.title,

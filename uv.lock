@@ -362,7 +362,7 @@ wheels = [
 [[package]]
 name = "deckui"
 version = "0.1.0"
-source = { git = "https://github.com/graphras-com/DeckUI.git#daaa327094cff9849dd0c4d311c4d6a544718352" }
+source = { git = "https://github.com/graphras-com/DeckUI.git#359c2a32610695234722c026928c3f616f641f4f" }
 dependencies = [
     { name = "cairosvg" },
     { name = "pillow" },
@@ -508,7 +508,6 @@ name = "hadeck"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "aiohttp" },
     { name = "deckui" },
     { name = "dotenv" },
     { name = "haclient" },
@@ -523,7 +522,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = ">=3.9" },
     { name = "deckui", git = "https://github.com/graphras-com/DeckUI.git" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "haclient", git = "https://github.com/graphras-com/HaClient.git" },

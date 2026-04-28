@@ -7,7 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "deckui",
     "haclient",
-    "aiohttp>=3.9",
     "dotenv>=0.9.9",
 ]
 

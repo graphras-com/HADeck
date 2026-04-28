@@ -8,7 +8,7 @@ from deckui.render.image_fetch import ImageFetchError, fetch_image
 
 log = logging.getLogger(__name__)
 
-PACKAGES_DIR = Path(__file__).parent
+PACKAGES_DIR = Path(__file__).parent / "dui"
 
 SCENES = [
     {"position": 2, "label": "Normal", "icon": "fa-regular:smile-beam"},

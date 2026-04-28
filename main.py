@@ -131,12 +131,12 @@ class AudioCardController:
 
         self._card.set("state", "Playing" if player.is_playing else "Paused")
 
-        volume = player.volume_level or 0.0
-        self._card.set("volume", volume)
+        volume_pct = (player.volume_level or 0.0) * 100
+        self._card.set_range("volume", volume_pct, min_val=0, max_val=100)
         if player.is_muted:
             self._card.set("value_text", "Muted")
         else:
-            self._card.set("value_text", f"{int(volume * 100)}%")
+            self._card.set("value_text", f"{int(volume_pct)}%")
 
         await self._deck.refresh()
 
@@ -159,9 +159,9 @@ class AudioCardController:
         @player.on_volume_change
         async def _on_volume(old, new):
             log.debug("AudioCardController._on_volume: %s → %s", old, new)
-            vol = player.volume_level or 0.0
-            self._card.set("volume", vol)
-            self._card.set("value_text", f"{int(vol * 100)}%")
+            vol_pct = (player.volume_level or 0.0) * 100
+            self._card.set_range("volume", vol_pct, min_val=0, max_val=100)
+            self._card.set("value_text", f"{int(vol_pct)}%")
             await self._fire_state_callbacks()
             await self._deck.refresh()
 
@@ -171,8 +171,8 @@ class AudioCardController:
             if new:
                 self._card.set("value_text", "Muted")
             else:
-                vol = player.volume_level or 0.0
-                self._card.set("value_text", f"{int(vol * 100)}%")
+                vol_pct = (player.volume_level or 0.0) * 100
+                self._card.set("value_text", f"{int(vol_pct)}%")
             await self._fire_state_callbacks()
             await self._deck.refresh()
 
@@ -208,19 +208,15 @@ class AudioCardController:
 
         @self._card.on("volume_up")
         async def _volume_up(steps: int):
-            step = 0.01
-            current = player.volume_level or 0.0
-            target = max(0.0, min(1.0, current + steps * step))
-            log.info("Volume: +%d steps → %.0f%%", steps, target * 100)
-            await player.set_volume(target)
+            new_vol = self._card.adjust_range("volume", steps, min_val=0, max_val=100)
+            log.info("Volume: +%d steps → %.0f%%", steps, new_vol)
+            await player.set_volume(new_vol / 100.0)
 
         @self._card.on("volume_down")
         async def _volume_down(steps: int):
-            step = 0.01
-            current = player.volume_level or 0.0
-            target = max(0.0, min(1.0, current - abs(steps) * step))
-            log.info("Volume: -%d steps → %.0f%%", abs(steps), target * 100)
-            await player.set_volume(target)
+            new_vol = self._card.adjust_range("volume", -abs(steps), min_val=0, max_val=100)
+            log.info("Volume: -%d steps → %.0f%%", abs(steps), new_vol)
+            await player.set_volume(new_vol / 100.0)
 
         @self._card.on("mute_toggle")
         async def _mute():
@@ -265,16 +261,14 @@ class LightCardController:
         self._card.set("lights", light.is_on)
 
         brightness = light.brightness or 0
-        brightness_pct = brightness / 255.0
-        self._card.set("brightness", brightness_pct)
-        self._card.set("brightness_value_text", f"{int(brightness_pct * 100)}%")
+        self._card.set_range("brightness", brightness, min_val=0, max_val=255)
+        brightness_pct = self._card.get_range("brightness", min_val=0, max_val=100)
+        self._card.set("brightness_value_text", f"{int(brightness_pct)}%")
 
         kelvin = light.kelvin or light.min_kelvin
         min_k = light.min_kelvin
         max_k = light.max_kelvin
-        kelvin_range = max_k - min_k
-        kelvin_pct = (kelvin - min_k) / kelvin_range if kelvin_range > 0 else 0.0
-        self._card.set("kelvin", kelvin_pct)
+        self._card.set_range("kelvin", kelvin, min_val=min_k, max_val=max_k)
         self._card.set("kelvin_value_text", f"{int(kelvin)}K")
 
     def _bind_events(self):
@@ -321,41 +315,35 @@ class LightCardController:
 
         @self._card.on("brightness_up")
         async def _brightness_up(steps: int):
-            step = 0.05
-            current = (self._light.brightness or 0) / 255.0
-            target = max(0.0, min(1.0, current + steps * step))
-            brightness = int(target * 255)
-            log.info("Brightness: +%d steps → %d%%", steps, int(target * 100))
-            await self._light.set_brightness(brightness)
+            step = 0.05 * 255
+            new_val = self._card.adjust_range("brightness", steps * step, min_val=0, max_val=255)
+            log.info("Brightness: +%d steps → %d%%", steps, int(new_val / 255 * 100))
+            await self._light.set_brightness(int(new_val))
 
         @self._card.on("brightness_down")
         async def _brightness_down(steps: int):
-            step = 0.05
-            current = (self._light.brightness or 0) / 255.0
-            target = max(0.0, min(1.0, current - abs(steps) * step))
-            brightness = int(target * 255)
-            log.info("Brightness: -%d steps → %d%%", abs(steps), int(target * 100))
-            await self._light.set_brightness(brightness)
+            step = 0.05 * 255
+            new_val = self._card.adjust_range("brightness", -abs(steps) * step, min_val=0, max_val=255)
+            log.info("Brightness: -%d steps → %d%%", abs(steps), int(new_val / 255 * 100))
+            await self._light.set_brightness(int(new_val))
 
         @self._card.on("kelvin_up")
         async def _kelvin_up(steps: int):
             step = 250
-            current = self._light.kelvin or self._light.min_kelvin
             min_k = self._light.min_kelvin
             max_k = self._light.max_kelvin
-            target = max(min_k, min(max_k, current + steps * step))
-            log.info("Kelvin: +%d steps → %dK", steps, target)
-            await self._light.set_kelvin(int(target))
+            new_val = self._card.adjust_range("kelvin", steps * step, min_val=min_k, max_val=max_k)
+            log.info("Kelvin: +%d steps → %dK", steps, int(new_val))
+            await self._light.set_kelvin(int(new_val))
 
         @self._card.on("kelvin_down")
         async def _kelvin_down(steps: int):
             step = 250
-            current = self._light.kelvin or self._light.min_kelvin
             min_k = self._light.min_kelvin
             max_k = self._light.max_kelvin
-            target = max(min_k, min(max_k, current - abs(steps) * step))
-            log.info("Kelvin: -%d steps → %dK", abs(steps), target)
-            await self._light.set_kelvin(int(target))
+            new_val = self._card.adjust_range("kelvin", -abs(steps) * step, min_val=min_k, max_val=max_k)
+            log.info("Kelvin: -%d steps → %dK", abs(steps), int(new_val))
+            await self._light.set_kelvin(int(new_val))
     # endregion
 
 class TimerCardController:
@@ -561,24 +549,16 @@ class DashboardCardController:
 
         @self._card.on("brightness_up")
         async def _brightness_up(steps: int):
-            step = 0.05
-            current = self._deck.brightness / 100.0
-            target = max(0.0, min(1.0, current + steps * step))
-            brightness = int(target * 100)
-            log.info("Deck brightness: +%d steps → %d%%", steps, brightness)
-            await self._deck.set_brightness(brightness)
-            self._card.set("deck_brightness", target)
+            new_val = self._card.adjust_range("deck_brightness", steps * 5, min_val=0, max_val=100)
+            log.info("Deck brightness: +%d steps → %d%%", steps, int(new_val))
+            await self._deck.set_brightness(int(new_val))
             await self._deck.refresh()
 
         @self._card.on("brightness_down")
         async def _brightness_down(steps: int):
-            step = 0.05
-            current = self._deck.brightness / 100.0
-            target = max(0.0, min(1.0, current - abs(steps) * step))
-            brightness = int(target * 100)
-            log.info("Deck brightness: -%d steps → %d%%", abs(steps), brightness)
-            await self._deck.set_brightness(brightness)
-            self._card.set("deck_brightness", target)
+            new_val = self._card.adjust_range("deck_brightness", -abs(steps) * 5, min_val=0, max_val=100)
+            log.info("Deck brightness: -%d steps → %d%%", abs(steps), int(new_val))
+            await self._deck.set_brightness(int(new_val))
             await self._deck.refresh()
 
     async def sync_state(self):
@@ -590,7 +570,7 @@ class DashboardCardController:
         self._format_datetime(self._datetime_sensor.state)
         self._card.set("temperature", f"{self._temp_sensor.state}°")
         self._card.set("humidity", f"{self._humidity_sensor.state}%")
-        self._card.set("deck_brightness", self._deck.brightness / 100.0)
+        self._card.set_range("deck_brightness", self._deck.brightness, min_val=0, max_val=100)
         await self._deck.refresh()
 
 async def watch_reconnect(ha: HAClient, on_reconnected):

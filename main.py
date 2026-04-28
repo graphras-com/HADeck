@@ -5,17 +5,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from io import BytesIO
-from pathlib import Path
-
-import aiohttp
-from dotenv import load_dotenv
-from PIL import Image
-
-from deckui import DeckManager, DeviceInfo, DuiCard, DuiKey, load_package
-from haclient import HAClient, NowPlaying, Timer
-
 import os
+
+from dotenv import load_dotenv
+
+from deckui import DeckManager, DeviceInfo, DuiKey, load_package
+from haclient import HAClient
+
+from controllers import (
+    AudioCardController,
+    DashboardCardController,
+    LightCardController,
+    TimerCardController,
+)
+from helpers import PACKAGES_DIR, setup_favorites, setup_scenes
 
 load_dotenv()
 
@@ -23,567 +26,17 @@ logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 
 log = logging.getLogger(__name__)
 
-PACKAGES_DIR = Path(__file__).parent
 STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
 MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
 UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "upstairs")
 TIMER_ENTITY = os.environ.get("TIMER_ENTITY", "streamdeck")
 
-async def _fetch_image(url: str) -> Image.Image | None:
-    """Download an image over HTTP without blocking the event loop."""
-    log.debug("_fetch_image: %s", url)
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status == 200:
-                    return Image.open(BytesIO(await resp.read()))
-    except Exception:
-        log.exception("Failed to fetch image: %s", url)
-    return None
-
-SCENES = [
-    { "position": 2, "label": "Normal", "icon": "fa-regular:smile-beam" },
-    { "position": 3, "label": "Tired", "icon": "fa-regular:tired" },
-    { "position": 6, "label": "Cinema", "icon": "mdi:cinema" },
-    { "position": 7, "label": "Bedtime", "icon": "icon-park-outline:sleep-two" }
-]
-
-async def setup_scenes(screen, iconkey_spec):
-    """Populate scenes keys on the screen."""
-    log.debug("setup_scenes: populating %d scenes", len(SCENES))
-    for scene in SCENES:
-        key = DuiKey(iconkey_spec)
-        key.set("icon", scene["icon"])
-        key.set("label", scene["label"])
-
-        @key.on_event("click")
-        async def _click(item=scene):
-            log.info("Activate: %s", item["label"])
-
-        screen.set_key(scene["position"], key)
-
-FAVORITE_KEY_SLOTS = [0, 1, 4, 5]
-CATEGORY_ORDER = {"Radio": 0, "Playlists": 1, "Albums": 2}
-
-async def setup_favorites(screen, player, picturekey_spec) -> list[DuiKey]:
-    """Populate favorite-media keys on the screen. Returns the created keys."""
-    log.debug("setup_favorites: fetching favorites")
-    favs = await player.favorites()
-    favs = sorted(
-        favs,
-        key=lambda f: (CATEGORY_ORDER.get(f.category or "", 99), f.title or ""),
-    )
-
-    keys: list[DuiKey] = []
-    for idx, fav in enumerate(favs):
-        if idx >= len(FAVORITE_KEY_SLOTS):
-            break
-        key = DuiKey(picturekey_spec)
-        if fav.thumbnail is not None:
-            thumb = await _fetch_image(fav.thumbnail)
-            if thumb is not None:
-                key.set("picture", thumb)
-
-        @key.on_event("click")
-        async def _click(item=fav, emitter=key):
-            log.info("Play: %s", item.title)
-            await emitter.start_busy()
-            await item.play()
-
-        screen.set_key(FAVORITE_KEY_SLOTS[idx], key)
-        keys.append(key)
-    return keys
-
-class AudioCardController:
-    """Manages the AudioCard DUI widget and its HA media-player bindings."""
-
-    def __init__(self, ha: HAClient, deck, player):
-        log.debug("AudioCardController.__init__")
-        self._ha = ha
-        self._deck = deck
-        self._player = player
-        audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
-        self._card = DuiCard(audiocard_spec)
-        self._on_state_callbacks: list = []
-        self._bind_events()
-
-    def on_any_state(self, callback):
-        """Register a callback to be invoked on any player state change."""
-        log.debug("AudioCardController.on_any_state: registering callback")
-        self._on_state_callbacks.append(callback)
-
-    async def _fire_state_callbacks(self):
-        log.debug("AudioCardController._fire_state_callbacks: %d callbacks", len(self._on_state_callbacks))
-        for cb in self._on_state_callbacks:
-            await cb()
-
-    @property
-    def card(self) -> DuiCard:
-        return self._card
-
-    async def sync_state(self):
-        """Read current player state and push it to the card."""
-        log.debug("AudioCardController.sync_state")
-        player = self._player
-        await player.async_refresh()
-
-        await self._update_now_playing(player.now_playing)
-
-        self._card.set("state", "Playing" if player.is_playing else "Paused")
-
-        volume_pct = (player.volume_level or 0.0) * 100
-        self._card.set_range("volume", volume_pct, min_val=0, max_val=100)
-        if player.is_muted:
-            self._card.set("value_text", "Muted")
-        else:
-            self._card.set("value_text", f"{int(volume_pct)}%")
-
-        await self._deck.refresh()
-
-    async def _update_now_playing(self, media: NowPlaying):
-        log.debug("AudioCardController._update_now_playing: %s - %s", media.artist, media.title)
-        picture = None
-        if media.entity_picture is not None:
-            picture = await _fetch_image(media.entity_picture)
-        self._card.set_many(
-            artist=media.artist,
-            title=media.title,
-            album=media.album,
-            cover=picture,
-        )
-
-    def _bind_events(self):
-        player = self._player
-        log.debug("AudioCardController._bind_events")
-
-        @player.on_volume_change
-        async def _on_volume(old, new):
-            log.debug("AudioCardController._on_volume: %s → %s", old, new)
-            vol_pct = (player.volume_level or 0.0) * 100
-            self._card.set_range("volume", vol_pct, min_val=0, max_val=100)
-            self._card.set("value_text", f"{int(vol_pct)}%")
-            await self._fire_state_callbacks()
-            await self._deck.refresh()
-
-        @player.on_mute_change
-        async def _on_mute(old, new):
-            log.debug("AudioCardController._on_mute: %s → %s", old, new)
-            if new:
-                self._card.set("value_text", "Muted")
-            else:
-                vol_pct = (player.volume_level or 0.0) * 100
-                self._card.set("value_text", f"{int(vol_pct)}%")
-            await self._fire_state_callbacks()
-            await self._deck.refresh()
-
-        @player.on_play
-        async def _on_play(old, new):
-            log.debug("AudioCardController._on_play")
-            self._card.set("state", "Playing")
-            await self._fire_state_callbacks()
-            await self._deck.refresh()
-
-        @player.on_pause
-        async def _on_pause(old, new):
-            log.debug("AudioCardController._on_pause")
-            self._card.set("state", "Paused")
-            await self._fire_state_callbacks()
-            await self._deck.refresh()
-
-        @player.on_media_change
-        async def _on_media(old, new):
-            log.debug("AudioCardController._on_media: %s", new)
-            await self._update_now_playing(new)
-            await self._fire_state_callbacks()
-            await self._deck.refresh()
-
-    def bind_card_events(self, encoder):
-        player = self._player
-        log.debug("AudioCardController.bind_card_events")
-
-        @self._card.on("toggle_play_pause")
-        async def _toggle():
-            log.debug("AudioCardController: toggle_play_pause")
-            await player.play_pause()
-
-        @self._card.on("volume_up")
-        async def _volume_up(steps: int):
-            new_vol = self._card.adjust_range("volume", steps, min_val=0, max_val=100)
-            log.info("Volume: +%d steps → %.0f%%", steps, new_vol)
-            await player.set_volume(new_vol / 100.0)
-
-        @self._card.on("volume_down")
-        async def _volume_down(steps: int):
-            new_vol = self._card.adjust_range("volume", -abs(steps), min_val=0, max_val=100)
-            log.info("Volume: -%d steps → %.0f%%", abs(steps), new_vol)
-            await player.set_volume(new_vol / 100.0)
-
-        @self._card.on("mute_toggle")
-        async def _mute():
-            log.debug("AudioCardController: mute_toggle")
-            await player.mute(not player.is_muted)
-
-        @self._card.on("next")
-        async def _next(steps: int):
-            log.info("Skip: next")
-            await player.next()
-
-        @self._card.on("previous")
-        async def _previous(steps: int):
-            log.info("Skip: previous")
-            await player.previous()
-
-class LightCardController:
-    """Manages the LightCard DUI widget and its HA light bindings."""
-
-    def __init__(self, ha: HAClient, deck, light):
-        log.debug("LightCardController.__init__")
-        self._ha = ha
-        self._deck = deck
-        self._light = light
-        lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
-        self._card = DuiCard(lightcard_spec)
-        self._bind_events()
-
-    @property
-    def card(self) -> DuiCard:
-        return self._card
-
-    async def sync_state(self):
-        log.debug("LightCardController.sync_state")
-        await self._light.async_refresh()
-        self._update_card_from_state()
-        await self._deck.refresh()
-
-    def _update_card_from_state(self):
-        log.debug("LightCardController._update_card_from_state")
-        light = self._light
-        self._card.set("lights", light.is_on)
-
-        brightness = light.brightness or 0
-        self._card.set_range("brightness", brightness, min_val=0, max_val=255)
-        brightness_pct = self._card.get_range("brightness", min_val=0, max_val=100)
-        self._card.set("brightness_value_text", f"{int(brightness_pct)}%")
-
-        kelvin = light.kelvin or light.min_kelvin
-        min_k = light.min_kelvin
-        max_k = light.max_kelvin
-        self._card.set_range("kelvin", kelvin, min_val=min_k, max_val=max_k)
-        self._card.set("kelvin_value_text", f"{int(kelvin)}K")
-
-    def _bind_events(self):
-        light = self._light
-        log.debug("LightCardController._bind_events")
-
-        @light.on_turn_on
-        async def _on_turn_on(old, new):
-            log.debug("LightCardController._on_turn_on")
-            self._update_card_from_state()
-            await self._deck.refresh()
-
-        @light.on_turn_off
-        async def _on_turn_off(old, new):
-            log.debug("LightCardController._on_turn_off")
-            self._update_card_from_state()
-            await self._deck.refresh()
-
-        @light.on_brightness_change
-        async def _on_brightness(old, new):
-            log.debug("LightCardController._on_brightness: %s → %s", old, new)
-            self._update_card_from_state()
-            await self._deck.refresh()
-
-        @light.on_color_change
-        async def _on_color(old, new):
-            log.debug("LightCardController._on_color: %s → %s", old, new)
-            self._update_card_from_state()
-            await self._deck.refresh()
-
-        @light.on_kelvin_change
-        async def _on_kelvin(old, new):
-            log.debug("LightCardController._on_kelvin: %s → %s", old, new)
-            self._update_card_from_state()
-            await self._deck.refresh()
-
-    def bind_card_events(self, encoder):
-        log.debug("LightCardController.bind_card_events")
-
-        @self._card.on("toggle")
-        async def _toggle():
-            log.debug("LightCardController: toggle")
-            await self._light.toggle()
-
-        @self._card.on("brightness_up")
-        async def _brightness_up(steps: int):
-            step = 0.05 * 255
-            new_val = self._card.adjust_range("brightness", steps * step, min_val=0, max_val=255)
-            log.info("Brightness: +%d steps → %d%%", steps, int(new_val / 255 * 100))
-            await self._light.set_brightness(int(new_val))
-
-        @self._card.on("brightness_down")
-        async def _brightness_down(steps: int):
-            step = 0.05 * 255
-            new_val = self._card.adjust_range("brightness", -abs(steps) * step, min_val=0, max_val=255)
-            log.info("Brightness: -%d steps → %d%%", abs(steps), int(new_val / 255 * 100))
-            await self._light.set_brightness(int(new_val))
-
-        @self._card.on("kelvin_up")
-        async def _kelvin_up(steps: int):
-            step = 250
-            min_k = self._light.min_kelvin
-            max_k = self._light.max_kelvin
-            new_val = self._card.adjust_range("kelvin", steps * step, min_val=min_k, max_val=max_k)
-            log.info("Kelvin: +%d steps → %dK", steps, int(new_val))
-            await self._light.set_kelvin(int(new_val))
-
-        @self._card.on("kelvin_down")
-        async def _kelvin_down(steps: int):
-            step = 250
-            min_k = self._light.min_kelvin
-            max_k = self._light.max_kelvin
-            new_val = self._card.adjust_range("kelvin", -abs(steps) * step, min_val=min_k, max_val=max_k)
-            log.info("Kelvin: -%d steps → %dK", abs(steps), int(new_val))
-            await self._light.set_kelvin(int(new_val))
-    
-
-class TimerCardController:
-    """Manages the TimerCard DUI widget and its HA timer bindings."""
-
-    DURATION_STEP = 30  # seconds per encoder tick
-
-    def __init__(self, ha: HAClient, deck, timer: Timer):
-        log.debug("TimerCardController.__init__")
-        self._ha = ha
-        self._deck = deck
-        self._timer = timer
-        timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
-        self._card = DuiCard(timercard_spec)
-        self._duration_seconds: int = 300  # default 5 minutes
-        self._tick_task: asyncio.Task | None = None
-        self._bind_events()
-
-    @property
-    def card(self) -> DuiCard:
-        return self._card
-
-    @staticmethod
-    def _fmt(seconds: int) -> str:
-        """Format seconds as HH:MM:SS."""
-        h, rem = divmod(max(seconds, 0), 3600)
-        m, s = divmod(rem, 60)
-        return f"{h:02d}:{m:02d}:{s:02d}"
-
-    @staticmethod
-    def _duration_str(seconds: int) -> str:
-        """Format seconds as H:MM:SS duration for HA service calls."""
-        h, rem = divmod(max(seconds, 0), 3600)
-        m, s = divmod(rem, 60)
-        return f"{h}:{m:02d}:{s:02d}"
-
-    def _start_tick(self):
-        """Start a background task that updates the display every second."""
-        log.debug("TimerCardController._start_tick")
-        self._stop_tick()
-        self._tick_task = asyncio.create_task(self._tick_loop())
-
-    def _stop_tick(self):
-        log.debug("TimerCardController._stop_tick")
-        if self._tick_task is not None:
-            self._tick_task.cancel()
-            self._tick_task = None
-
-    async def _tick_loop(self):
-        try:
-            while True:
-                remaining = self._timer.time_remaining
-                if remaining is not None:
-                    self._card.set("timer", self._fmt(int(remaining)))
-                    await self._deck.refresh()
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-
-    async def sync_state(self):
-        log.debug("TimerCardController.sync_state")
-        await self._timer.async_refresh()
-        self._update_card_from_state()
-        await self._deck.refresh()
-
-    def _update_card_from_state(self):
-        timer = self._timer
-        log.debug("TimerCardController._update_card_from_state: active=%s paused=%s", timer.is_active, timer.is_paused)
-        if timer.is_active:
-            remaining = timer.time_remaining
-            self._card.set("timer", self._fmt(int(remaining or 0)))
-            self._start_tick()
-        elif timer.is_paused:
-            remaining = timer.time_remaining
-            self._card.set("timer", self._fmt(int(remaining or 0)))
-            self._stop_tick()
-        else:
-            self._card.set("timer", self._fmt(self._duration_seconds))
-            self._stop_tick()
-
-    def _bind_events(self):
-        timer = self._timer
-        log.debug("TimerCardController._bind_events")
-
-        @timer.on_start
-        async def _on_start(old, new):
-            log.debug("TimerCardController._on_start")
-            self._start_tick()
-            await self._deck.refresh()
-
-        @timer.on_pause
-        async def _on_pause(old, new):
-            log.debug("TimerCardController._on_pause")
-            self._stop_tick()
-            remaining = timer.time_remaining
-            if remaining is not None:
-                self._card.set("timer", self._fmt(int(remaining)))
-            await self._deck.refresh()
-
-        @timer.on_idle
-        async def _on_idle(old, new):
-            log.debug("TimerCardController._on_idle")
-            self._stop_tick()
-            self._card.set("timer", self._fmt(self._duration_seconds))
-            await self._deck.refresh()
-
-    def bind_card_events(self, encoder):
-        timer = self._timer
-        log.debug("TimerCardController.bind_card_events")
-
-        @self._card.on("toggle")
-        async def _toggle():
-            log.debug("TimerCardController: toggle (active=%s paused=%s)", timer.is_active, timer.is_paused)
-            if timer.is_active:
-                await timer.pause()
-            elif timer.is_paused:
-                await timer.start()
-            else:
-                duration = self._duration_str(self._duration_seconds)
-                log.debug("TimerCardController: start (duration_str=%s duration=%d)", duration, self._duration_seconds)
-                #await timer.start(duration=duration)
-                await timer.start(duration="00:00:10")
-
-        @self._card.on("reset")
-        async def _reset():
-            log.debug("TimerCardController: reset")
-            if timer.is_active or timer.is_paused:
-                await timer.cancel()
-
-        @self._card.on("increase_duration")
-        async def _increase_duration(steps: int):
-            log.debug("TimerCardController: increase_duration steps=+%d", steps)
-            if not timer.is_active:
-                self._duration_seconds = max(
-                    self.DURATION_STEP,
-                    min(86400, self._duration_seconds + steps * self.DURATION_STEP),
-                )
-                self._card.set("timer", self._fmt(self._duration_seconds))
-                await self._deck.refresh()
-
-        @self._card.on("decrease_duration")
-        async def _decrease_duration(steps: int):
-            log.debug("TimerCardController: decrease_duration steps=-%d", abs(steps))
-            if not timer.is_active:
-                self._duration_seconds = max(
-                    self.DURATION_STEP,
-                    min(86400, self._duration_seconds - abs(steps) * self.DURATION_STEP),
-                )
-                self._card.set("timer", self._fmt(self._duration_seconds))
-                await self._deck.refresh()
-
-class DashboardCardController:
-    """Manages the DashboardCard DUI widget."""
-
-    def __init__(self, ha: HAClient, deck):
-        log.debug("DashboardCardController.__init__")
-        self._ha = ha
-        self._deck = deck
-        dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
-        self._card = DuiCard(dashboardcard_spec)
-        self._datetime_sensor = ha.sensor("date_time")
-        self._temp_sensor = ha.sensor("livingroom_temperature")
-        self._humidity_sensor = ha.sensor("livingroom_humidity")
-        self._bind_events()
-
-    @property
-    def card(self) -> DuiCard:
-        return self._card
-
-    def _format_datetime(self, value: str):
-        """Parse 'YYYY-MM-DD, HH:MM' from sensor.date_time and update card."""
-        log.debug("DashboardCardController._format_datetime: %s", value)
-        try:
-            from datetime import datetime
-            dt = datetime.strptime(value, "%Y-%m-%d, %H:%M")
-            self._card.set("date", dt.strftime("%A, %d %b"))
-            self._card.set("time", dt.strftime("%H:%M"))
-        except (ValueError, TypeError):
-            log.warning("Could not parse date_time: %s", value)
-
-    def _bind_events(self):
-        log.debug("DashboardCardController._bind_events")
-
-        @self._datetime_sensor.on_value_change
-        async def _on_datetime(old, new):
-            log.debug("DashboardCardController._on_datetime: %s → %s", old, new)
-            self._format_datetime(new)
-            await self._deck.refresh()
-
-        @self._temp_sensor.on_value_change
-        async def _on_temp(old, new):
-            log.debug("DashboardCardController._on_temp: %s → %s", old, new)
-            self._card.set("temperature", f"{new}°")
-            await self._deck.refresh()
-
-        @self._humidity_sensor.on_value_change
-        async def _on_humidity(old, new):
-            log.debug("DashboardCardController._on_humidity: %s → %s", old, new)
-            self._card.set("humidity", f"{new}%")
-            await self._deck.refresh()
-
-    def bind_card_events(self, encoder):
-        log.debug("DashboardCardController.bind_card_events")
-
-        @self._card.on("brightness_up")
-        async def _brightness_up(steps: int):
-            new_val = self._card.adjust_range("deck_brightness", steps * 5, min_val=0, max_val=100)
-            log.info("Deck brightness: +%d steps → %d%%", steps, int(new_val))
-            await self._deck.set_brightness(int(new_val))
-            await self._deck.refresh()
-
-        @self._card.on("brightness_down")
-        async def _brightness_down(steps: int):
-            new_val = self._card.adjust_range("deck_brightness", -abs(steps) * 5, min_val=0, max_val=100)
-            log.info("Deck brightness: -%d steps → %d%%", abs(steps), int(new_val))
-            await self._deck.set_brightness(int(new_val))
-            await self._deck.refresh()
-
-    async def sync_state(self):
-        log.debug("DashboardCardController.sync_state")
-        await self._datetime_sensor.async_refresh()
-        await self._temp_sensor.async_refresh()
-        await self._humidity_sensor.async_refresh()
-
-        self._format_datetime(self._datetime_sensor.state)
-        self._card.set("temperature", f"{self._temp_sensor.state}°")
-        self._card.set("humidity", f"{self._humidity_sensor.state}%")
-        self._card.set_range("deck_brightness", self._deck.brightness, min_val=0, max_val=100)
-        await self._deck.refresh()
-
 
 async def run():
     log.debug("run: starting")
-    
-    #audiocard_spec = load_package(PACKAGES_DIR / "AudioCard.dui")
+
     picturekey_spec = load_package(PACKAGES_DIR / "PictureKey.dui")
     iconkey_spec = load_package(PACKAGES_DIR / "IconKey.dui")
-    #lightcard_spec = load_package(PACKAGES_DIR / "LightCard.dui")
-    #dashboardcard_spec = load_package(PACKAGES_DIR / "DashboardCard.dui")
-    #timercard_spec = load_package(PACKAGES_DIR / "TimerCard.dui")
 
     server = os.environ["HA_URL"]
     token = os.environ["HA_TOKEN"]
@@ -593,7 +46,6 @@ async def run():
     async with HAClient(server, token=token) as ha:
         player = ha.media_player(MEDIA_PLAYER)
         upstairs = ha.light(UPSTAIRS_LIGHTS)
-        #timer = ha.timer(TIMER_ENTITY)
         timer = ha.timer()
 
         @manager.on_connect(serial=STREAMDECK_SERIAL)
@@ -631,7 +83,7 @@ async def run():
             async def load_state():
                 """(Re)load all HA state and refresh the deck."""
                 nonlocal favorite_keys
-                log.info("Loading Home Assistant state…")
+                log.info("Loading Home Assistant state...")
                 await ha.refresh_all()
                 favorite_keys = await setup_favorites(screen, player, picturekey_spec)
                 await setup_scenes(screen, iconkey_spec)
@@ -643,7 +95,7 @@ async def run():
             async def sync_deck():
                 """Re-sync deck UI after HAClient reconnects (state already refreshed)."""
                 nonlocal favorite_keys
-                log.info("Re-syncing deck after reconnect…")
+                log.info("Re-syncing deck after reconnect...")
                 favorite_keys = await setup_favorites(screen, player, picturekey_spec)
                 await setup_scenes(screen, iconkey_spec)
                 await audio_ctrl.sync_state()
@@ -660,15 +112,17 @@ async def run():
 
         @manager.on_disconnect
         async def on_deck_disconnect(info: DeviceInfo):
-            log.warning("Deck disconnected: %s — waiting for reconnect…", info.serial)
+            log.warning("Deck disconnected: %s -- waiting for reconnect...", info.serial)
 
-        log.info("Waiting for StreamDeck %s…", STREAMDECK_SERIAL)
+        log.info("Waiting for StreamDeck %s...", STREAMDECK_SERIAL)
         async with manager:
             await manager.wait_closed()
+
 
 def main():
     log.debug("main: entry")
     asyncio.run(run())
+
 
 if __name__ == "__main__":
     main()

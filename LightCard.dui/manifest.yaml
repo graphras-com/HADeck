@@ -47,18 +47,24 @@ events:
   - name: brightness_up
     source: encoder_turn
     direction: right
+    accumulate: true
 
   - name: brightness_down
     source: encoder_turn
     direction: left
+    accumulate: true
 
   - name: kelvin_up
     source: encoder_press_turn
     direction: right
+    accumulate: true
+    accumulate_max_steps: 1
 
   - name: kelvin_down
     source: encoder_press_turn
     direction: left
+    accumulate: true
+    accumulate_max_steps: 1
 
 regions:
   card:

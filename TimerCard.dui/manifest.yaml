@@ -19,10 +19,12 @@ events:
   - name: decrease_duration
     source: encoder_turn
     direction: left
+    accumulate: true
 
   - name: increase_duration
     source: encoder_turn
     direction: right
+    accumulate: true
 
   - name: toggle
     source: encoder_press_release

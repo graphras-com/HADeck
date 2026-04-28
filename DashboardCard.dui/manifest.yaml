@@ -46,10 +46,14 @@ events:
   - name: brightness_down
     source: encoder_turn
     direction: left
+    accumulate: true
+    accumulate_delay: 0.05
 
   - name: brightness_up
     source: encoder_turn
     direction: right
+    accumulate: true
+    accumulate_delay: 0.05
 
 regions:
   card:

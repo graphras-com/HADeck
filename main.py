@@ -206,12 +206,20 @@ class AudioCardController:
             log.debug("AudioCardController: toggle_play_pause")
             await player.play_pause()
 
-        @encoder.on_turn_accumulated
-        async def _volume(steps: int):
+        @self._card.on("volume_up")
+        async def _volume_up(steps: int):
             step = 0.01
             current = player.volume_level or 0.0
             target = max(0.0, min(1.0, current + steps * step))
-            log.info("Volume: %+d steps → %.0f%%", steps, target * 100)
+            log.info("Volume: +%d steps → %.0f%%", steps, target * 100)
+            await player.set_volume(target)
+
+        @self._card.on("volume_down")
+        async def _volume_down(steps: int):
+            step = 0.01
+            current = player.volume_level or 0.0
+            target = max(0.0, min(1.0, current - steps * step))
+            log.info("Volume: -%d steps → %.0f%%", steps, target * 100)
             await player.set_volume(target)
 
         @self._card.on("mute_toggle")
@@ -219,14 +227,15 @@ class AudioCardController:
             log.debug("AudioCardController: mute_toggle")
             await player.mute(not player.is_muted)
 
-        @encoder.on_press_turn_accumulated(max_steps=1)
-        async def _skip(steps: int):
-            if steps > 0:
-                log.info("Skip: next")
-                await player.next()
-            else:
-                log.info("Skip: previous")
-                await player.previous()
+        @self._card.on("next")
+        async def _next(steps: int):
+            log.info("Skip: next")
+            await player.next()
+
+        @self._card.on("previous")
+        async def _previous(steps: int):
+            log.info("Skip: previous")
+            await player.previous()
 
 class LightCardController:
     """Manages the LightCard DUI widget and its HA light bindings."""
@@ -310,23 +319,42 @@ class LightCardController:
             log.debug("LightCardController: toggle")
             await self._light.toggle()
 
-        @encoder.on_turn_accumulated
-        async def _brightness(steps: int):
+        @self._card.on("brightness_up")
+        async def _brightness_up(steps: int):
             step = 0.05
             current = (self._light.brightness or 0) / 255.0
             target = max(0.0, min(1.0, current + steps * step))
             brightness = int(target * 255)
-            log.info("Brightness: %+d steps → %d%%", steps, int(target * 100))
+            log.info("Brightness: +%d steps → %d%%", steps, int(target * 100))
             await self._light.set_brightness(brightness)
 
-        @encoder.on_press_turn_accumulated(max_steps=1)
-        async def _kelvin(steps: int):
+        @self._card.on("brightness_down")
+        async def _brightness_down(steps: int):
+            step = 0.05
+            current = (self._light.brightness or 0) / 255.0
+            target = max(0.0, min(1.0, current - steps * step))
+            brightness = int(target * 255)
+            log.info("Brightness: -%d steps → %d%%", steps, int(target * 100))
+            await self._light.set_brightness(brightness)
+
+        @self._card.on("kelvin_up")
+        async def _kelvin_up(steps: int):
             step = 250
             current = self._light.kelvin or self._light.min_kelvin
             min_k = self._light.min_kelvin
             max_k = self._light.max_kelvin
             target = max(min_k, min(max_k, current + steps * step))
-            log.info("Kelvin: %+d steps → %dK", steps, target)
+            log.info("Kelvin: +%d steps → %dK", steps, target)
+            await self._light.set_kelvin(int(target))
+
+        @self._card.on("kelvin_down")
+        async def _kelvin_down(steps: int):
+            step = 250
+            current = self._light.kelvin or self._light.min_kelvin
+            min_k = self._light.min_kelvin
+            max_k = self._light.max_kelvin
+            target = max(min_k, min(max_k, current - steps * step))
+            log.info("Kelvin: -%d steps → %dK", steps, target)
             await self._light.set_kelvin(int(target))
     # endregion
 
@@ -387,7 +415,6 @@ class TimerCardController:
         except asyncio.CancelledError:
             pass
 
-    # region state sync
     async def sync_state(self):
         log.debug("TimerCardController.sync_state")
         await self._timer.async_refresh()
@@ -408,9 +435,7 @@ class TimerCardController:
         else:
             self._card.set("timer", self._fmt(self._duration_seconds))
             self._stop_tick()
-    # endregion
 
-    # region HA event handlers
     def _bind_events(self):
         timer = self._timer
         log.debug("TimerCardController._bind_events")
@@ -436,9 +461,7 @@ class TimerCardController:
             self._stop_tick()
             self._card.set("timer", self._fmt(self._duration_seconds))
             await self._deck.refresh()
-    # endregion
 
-    # region card UI event handlers
     def bind_card_events(self, encoder):
         timer = self._timer
         log.debug("TimerCardController.bind_card_events")
@@ -460,13 +483,24 @@ class TimerCardController:
             if timer.is_active or timer.is_paused:
                 await timer.cancel()
 
-        @encoder.on_turn_accumulated
-        async def _adjust_duration(steps: int):
-            log.debug("TimerCardController: adjust_duration steps=%+d", steps)
+        @self._card.on("increase_duration")
+        async def _increase_duration(steps: int):
+            log.debug("TimerCardController: increase_duration steps=+%d", steps)
             if timer.is_idle:
                 self._duration_seconds = max(
                     self.DURATION_STEP,
                     min(86400, self._duration_seconds + steps * self.DURATION_STEP),
+                )
+                self._card.set("timer", self._fmt(self._duration_seconds))
+                await self._deck.refresh()
+
+        @self._card.on("decrease_duration")
+        async def _decrease_duration(steps: int):
+            log.debug("TimerCardController: decrease_duration steps=-%d", steps)
+            if timer.is_idle:
+                self._duration_seconds = max(
+                    self.DURATION_STEP,
+                    min(86400, self._duration_seconds - steps * self.DURATION_STEP),
                 )
                 self._card.set("timer", self._fmt(self._duration_seconds))
                 await self._deck.refresh()
@@ -525,13 +559,24 @@ class DashboardCardController:
     def bind_card_events(self, encoder):
         log.debug("DashboardCardController.bind_card_events")
 
-        @encoder.on_turn_accumulated(delay=0.05)
-        async def _brightness(steps: int):
+        @self._card.on("brightness_up")
+        async def _brightness_up(steps: int):
             step = 0.05
             current = self._deck.brightness / 100.0
             target = max(0.0, min(1.0, current + steps * step))
             brightness = int(target * 100)
-            log.info("Deck brightness: %+d steps → %d%%", steps, brightness)
+            log.info("Deck brightness: +%d steps → %d%%", steps, brightness)
+            await self._deck.set_brightness(brightness)
+            self._card.set("deck_brightness", target)
+            await self._deck.refresh()
+
+        @self._card.on("brightness_down")
+        async def _brightness_down(steps: int):
+            step = 0.05
+            current = self._deck.brightness / 100.0
+            target = max(0.0, min(1.0, current - steps * step))
+            brightness = int(target * 100)
+            log.info("Deck brightness: -%d steps → %d%%", steps, brightness)
             await self._deck.set_brightness(brightness)
             self._card.set("deck_brightness", target)
             await self._deck.refresh()

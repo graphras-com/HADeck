@@ -4,7 +4,8 @@ import logging
 from pathlib import Path
 
 from deckui import DuiCard, load_package
-from haclient import HAClient, NowPlaying
+from haclient import HAClient
+from haclient.domains import NowPlaying
 
 from deckui.render.image_fetch import ImageFetchError, fetch_image
 

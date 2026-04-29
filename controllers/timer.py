@@ -4,7 +4,8 @@ import asyncio
 import logging
 
 from deckui import DuiCard, load_package
-from haclient import HAClient, Timer
+from haclient import HAClient
+from haclient.domains import Timer
 
 from helpers import PACKAGES_DIR
 

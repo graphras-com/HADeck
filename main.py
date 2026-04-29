@@ -27,9 +27,9 @@ logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 STREAMDECK_SERIAL = os.environ.get("STREAMDECK_SERIAL")
-MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER")
+MEDIA_PLAYER = os.environ.get("MEDIA_PLAYER", "entertainment")
 UPSTAIRS_LIGHTS = os.environ.get("UPSTAIRS_LIGHTS", "upstairs")
-TIMER_ENTITY = os.environ.get("TIMER_ENTITY", "streamdeck")
+TIMER_NAME = os.environ.get("TIMER_ENTITY", "streamdeck")
 
 
 async def run():
@@ -43,10 +43,10 @@ async def run():
 
     manager = DeckManager(brightness=60, auto_reconnect=True)
 
-    async with HAClient(server, token=token) as ha:
+    async with HAClient.from_url(server, token=token) as ha:
         player = ha.media_player(MEDIA_PLAYER)
         upstairs = ha.light(UPSTAIRS_LIGHTS)
-        timer = ha.timer()
+        timer = ha.timer("TIMER_NAME")
 
         @manager.on_connect(serial=STREAMDECK_SERIAL)
         async def on_deck_connect(deck):
@@ -84,7 +84,6 @@ async def run():
                 """(Re)load all HA state and refresh the deck."""
                 nonlocal favorite_keys
                 log.info("Loading Home Assistant state...")
-                await ha.refresh_all()
                 favorite_keys = await setup_favorites(screen, player, picturekey_spec)
                 await setup_scenes(screen, iconkey_spec)
                 await audio_ctrl.sync_state()

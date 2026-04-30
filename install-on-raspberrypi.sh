@@ -49,7 +49,7 @@ chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
 echo "==> Installing Python dependencies..."
 cd "$INSTALL_DIR"
 UV_BIN="$(command -v uv || echo "/root/.local/bin/uv")"
-su -s /bin/bash "$SERVICE_USER" -c "$UV_BIN sync"
+/bin/bash "$SERVICE_USER" -c "$UV_BIN sync"
 
 # Remind about .env
 if [ ! -f "$INSTALL_DIR/.env" ]; then

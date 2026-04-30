@@ -7,7 +7,7 @@ set -euo pipefail
 INSTALL_DIR="/opt/hadeck"
 SERVICE_USER="hadeck"
 
-if [[ $EUID -ne 0 ]]; then
+if [ "$(id -u)" -ne 0 ]; then
     echo "Error: This script must be run as root (use sudo)." >&2
     exit 1
 fi

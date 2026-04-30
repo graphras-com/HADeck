@@ -48,10 +48,11 @@ chown -R "$SERVICE_USER":"$SERVICE_USER" "$INSTALL_DIR"
 
 echo "==> Installing Python dependencies..."
 cd "$INSTALL_DIR"
-su -s /bin/bash "$SERVICE_USER" -c "uv sync"
+UV_BIN="$(command -v uv || echo "/root/.local/bin/uv")"
+su -s /bin/bash "$SERVICE_USER" -c "$UV_BIN sync"
 
 # Remind about .env
-if [[ ! -f "$INSTALL_DIR/.env" ]]; then
+if [ ! -f "$INSTALL_DIR/.env" ]; then
     echo ""
     echo "WARNING: No .env file found at $INSTALL_DIR/.env"
     echo "Create it with HA_URL and HA_TOKEN before starting the service."

@@ -15,16 +15,30 @@ bindings:
     max_width: 190
     overflow: ellipsis
 
+  background:
+    type: color
+    node: background
+    attribute: color
+    default: "#1c1c1c"
+
+  foreground:
+    type: color
+    node: foreground
+    attribute: color
+    default: "#dedede"
+
 events:
   - name: decrease_duration
     source: encoder_turn
     direction: left
     accumulate: true
+    accumulate_delay: 0.01
 
   - name: increase_duration
     source: encoder_turn
     direction: right
     accumulate: true
+    accumulate_delay: 0.01
 
   - name: toggle
     source: encoder_press_release

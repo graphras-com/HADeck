@@ -24,9 +24,11 @@ if ! command -v uv &>/dev/null; then
 fi
 
 # Create service user if it doesn't exist
-if ! id "$SERVICE_USER" &>/dev/null; then
+if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "==> Creating service user '$SERVICE_USER'..."
     useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+else
+    echo "==> Service user '$SERVICE_USER' already exists, skipping."
 fi
 
 # Set up udev rules for StreamDeck+ HID access

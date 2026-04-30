@@ -5,10 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+User=hadeck
+Group=hadeck
 WorkingDirectory=/opt/hadeck
-ExecStart=/opt/HADeck/.venv/bin/python main.py
-EnvironmentFile=/opt/HADeck/.env
+ExecStart=/opt/hadeck/.venv/bin/python main.py
+EnvironmentFile=/opt/hadeck/.env
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

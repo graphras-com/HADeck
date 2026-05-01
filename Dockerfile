@@ -4,7 +4,9 @@ FROM python:3.11-slim AS base
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         git \
+        libcairo2-dev \
         libusb-1.0-0 \
+        libhidapi-dev \
         libhidapi-libusb0 \
     && rm -rf /var/lib/apt/lists/*
 

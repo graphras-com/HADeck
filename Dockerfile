@@ -3,6 +3,7 @@ FROM python:3.11-slim AS base
 # System deps for USB/HID access (StreamDeck)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        git \
         libusb-1.0-0 \
         libhidapi-libusb0 \
     && rm -rf /var/lib/apt/lists/*

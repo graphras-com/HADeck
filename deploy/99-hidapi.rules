@@ -1,2 +1,0 @@
-#Bus 001 Device 003: ID 0fd9:0084 Elgato Systems GmbH Stream Deck Plus
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", ATTRS{idProduct}=="0084", MODE="0660", GROUP="usbaccess"

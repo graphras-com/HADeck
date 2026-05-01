@@ -1,0 +1,7 @@
+services:
+  hadeck:
+    build: .
+    env_file: .env
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    restart: unless-stopped
